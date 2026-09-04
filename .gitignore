@@ -1,0 +1,34 @@
+# ── macOS ─────────────────────────────────────────────────────────────────
+.DS_Store
+
+# ── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# ── Node / Vite（CUA-Gym-Hub mock 应用）──────────────────────────────────
+node_modules/
+
+# ── 环境变量（含 API 密钥，切勿提交）─────────────────────────────────────
+.env
+.env.local
+.env.*.local
+# 例外：该文件仅为监视器配置，仓库有意跟踪（文件内注明不含敏感信息）
+!osworld/monitor/.env
+
+# ── CUA-Gym-Hub 运行期状态（mock 运行时自动生成的产物）───────────────────
+.mock-states/
+.mock-files/
+.mock-state.json
+.mock-state.initial.json
+
+# ── CUA-Gym / OSWorld 运行期输出 ─────────────────────────────────────────
+gym/output/
+osworld/results*/
+*.log
