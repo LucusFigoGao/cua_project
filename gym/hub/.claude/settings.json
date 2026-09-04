@@ -1,0 +1,50 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Task",
+      "TaskOutput",
+      "WebSearch",
+      "WebFetch",
+      "mcp__plugin_playwright_playwright__browser_*"
+    ]
+  },
+  "enabledPlugins": {
+    "playwright@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true
+  },
+  "agents": {
+    "plan": {
+      "description": "Research and planning agent. Given an app name, performs comprehensive web research, collects UI screenshots, documents features and data models in assets/, and produces a prioritized feature todo list in memory.md for the dev agent.",
+      "prompt": ".claude/agents/plan.md"
+    },
+    "dev": {
+      "description": "Expert frontend developer for mock web applications. Handles all code work — building from scratch, feature implementation, UI/UX polish, data structure design, and debugging.",
+      "prompt": ".claude/agents/dev.md"
+    },
+    "playwright": {
+      "description": "UI testing agent. Launches the dev server, uses Playwright to test every interactive element on every route, writes bug reports to TEST.md, and iterates with the dev agent until all visible interactions work correctly.",
+      "prompt": ".claude/agents/playwright.md"
+    },
+    "task-proposal": {
+      "description": "Generate computer-use tasks by analyzing mock applications",
+      "prompt": ".claude/agents/task-proposal.md"
+    },
+    "orchestrator": {
+      "description": "Loop orchestrator for mock app development. Coordinates plan, dev, audit, and playwright agents in iterative rounds.",
+      "prompt": ".claude/agents/orchestrator.md"
+    },
+    "audit": {
+      "description": "Code audit agent. After each dev round, audits for dead UI handlers, untracked state changes, and data pipeline integrity. Produces AUDIT.md fix list and maintains SCHEMA.md.",
+      "prompt": ".claude/agents/audit.md"
+    }
+  }
+}
