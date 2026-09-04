@@ -1,0 +1,15 @@
+{
+  "num_tasks": 10910,
+  "num_source_tasks": 10910,
+  "sample_size": 10910,
+  "sample_seed": null,
+  "num_app_types": 327,
+  "num_missing_difficulty": 3545,
+  "num_desktop_tasks": 8029,
+  "num_web_tasks": 1075,
+  "num_cross_app_tasks": 430,
+  "artifact_archive": "artifacts/cua_gym_tasks_v1.tar.zst",
+  "num_url_variable_placeholders": 45,
+  "num_files_with_url_placeholders": 2987,
+  "num_url_replacements": 4941
+}

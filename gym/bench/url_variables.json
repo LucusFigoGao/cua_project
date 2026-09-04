@@ -1,0 +1,320 @@
+{
+  "notice": "CUA-Gym web task artifacts use placeholders for hosted mock-app endpoints. Deploy CUA-Gym-Hub yourself and materialize these placeholders with your own URLs before executing setup or reward files.",
+  "variables": {
+    "__CUA_GYM_ASANA_URL__": {
+      "placeholder": "__CUA_GYM_ASANA_URL__",
+      "env": "CUA_GYM_ASANA_URL",
+      "default": "https://cua-gym-asana.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_DISCORD_URL__": {
+      "placeholder": "__CUA_GYM_DISCORD_URL__",
+      "env": "CUA_GYM_DISCORD_URL",
+      "default": "https://cua-gym-discord.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_DOCUSIGN_URL__": {
+      "placeholder": "__CUA_GYM_DOCUSIGN_URL__",
+      "env": "CUA_GYM_DOCUSIGN_URL",
+      "default": "https://cua-gym-docusign.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_FACEBOOK_HOST__": {
+      "placeholder": "__CUA_GYM_FACEBOOK_HOST__",
+      "env": "CUA_GYM_FACEBOOK_HOST",
+      "default": "cua-gym-facebook.xlang.ai",
+      "kind": "host",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_FACEBOOK_URL__": {
+      "placeholder": "__CUA_GYM_FACEBOOK_URL__",
+      "env": "CUA_GYM_FACEBOOK_URL",
+      "default": "https://cua-gym-facebook.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_GITHUB_HOST__": {
+      "placeholder": "__CUA_GYM_GITHUB_HOST__",
+      "env": "CUA_GYM_GITHUB_HOST",
+      "default": "cua-gym-github.xlang.ai",
+      "kind": "host",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_GITHUB_URL__": {
+      "placeholder": "__CUA_GYM_GITHUB_URL__",
+      "env": "CUA_GYM_GITHUB_URL",
+      "default": "https://cua-gym-github.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_GITLAB_HOST__": {
+      "placeholder": "__CUA_GYM_GITLAB_HOST__",
+      "env": "CUA_GYM_GITLAB_HOST",
+      "default": "cua-gym-gitlab.xlang.ai",
+      "kind": "host",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_GITLAB_URL__": {
+      "placeholder": "__CUA_GYM_GITLAB_URL__",
+      "env": "CUA_GYM_GITLAB_URL",
+      "default": "https://cua-gym-gitlab.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_GMAIL_HOST__": {
+      "placeholder": "__CUA_GYM_GMAIL_HOST__",
+      "env": "CUA_GYM_GMAIL_HOST",
+      "default": "cua-gym-gmail.xlang.ai",
+      "kind": "host",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_GMAIL_URL__": {
+      "placeholder": "__CUA_GYM_GMAIL_URL__",
+      "env": "CUA_GYM_GMAIL_URL",
+      "default": "https://cua-gym-gmail.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_GOOGLE_CALENDAR_URL__": {
+      "placeholder": "__CUA_GYM_GOOGLE_CALENDAR_URL__",
+      "env": "CUA_GYM_GOOGLE_CALENDAR_URL",
+      "default": "https://cua-gym-google-calendar.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_GOOGLE_DOCS_HOST__": {
+      "placeholder": "__CUA_GYM_GOOGLE_DOCS_HOST__",
+      "env": "CUA_GYM_GOOGLE_DOCS_HOST",
+      "default": "cua-gym-google-docs.xlang.ai",
+      "kind": "host",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_GOOGLE_DOCS_URL__": {
+      "placeholder": "__CUA_GYM_GOOGLE_DOCS_URL__",
+      "env": "CUA_GYM_GOOGLE_DOCS_URL",
+      "default": "https://cua-gym-google-docs.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_GOOGLE_DRIVE_HOST__": {
+      "placeholder": "__CUA_GYM_GOOGLE_DRIVE_HOST__",
+      "env": "CUA_GYM_GOOGLE_DRIVE_HOST",
+      "default": "cua-gym-google-drive.xlang.ai",
+      "kind": "host",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_GOOGLE_DRIVE_URL__": {
+      "placeholder": "__CUA_GYM_GOOGLE_DRIVE_URL__",
+      "env": "CUA_GYM_GOOGLE_DRIVE_URL",
+      "default": "https://cua-gym-google-drive.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_GOOGLE_SHEETS_HOST__": {
+      "placeholder": "__CUA_GYM_GOOGLE_SHEETS_HOST__",
+      "env": "CUA_GYM_GOOGLE_SHEETS_HOST",
+      "default": "cua-gym-google-sheets.xlang.ai",
+      "kind": "host",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_GOOGLE_SHEETS_URL__": {
+      "placeholder": "__CUA_GYM_GOOGLE_SHEETS_URL__",
+      "env": "CUA_GYM_GOOGLE_SHEETS_URL",
+      "default": "https://cua-gym-google-sheets.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_HUBSPOT_HOST__": {
+      "placeholder": "__CUA_GYM_HUBSPOT_HOST__",
+      "env": "CUA_GYM_HUBSPOT_HOST",
+      "default": "cua-gym-hubspot.xlang.ai",
+      "kind": "host",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_HUBSPOT_URL__": {
+      "placeholder": "__CUA_GYM_HUBSPOT_URL__",
+      "env": "CUA_GYM_HUBSPOT_URL",
+      "default": "https://cua-gym-hubspot.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_INSTACART_HOST__": {
+      "placeholder": "__CUA_GYM_INSTACART_HOST__",
+      "env": "CUA_GYM_INSTACART_HOST",
+      "default": "cua-gym-instacart.xlang.ai",
+      "kind": "host",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_INSTACART_URL__": {
+      "placeholder": "__CUA_GYM_INSTACART_URL__",
+      "env": "CUA_GYM_INSTACART_URL",
+      "default": "https://cua-gym-instacart.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_INSTAGRAM_HOST__": {
+      "placeholder": "__CUA_GYM_INSTAGRAM_HOST__",
+      "env": "CUA_GYM_INSTAGRAM_HOST",
+      "default": "cua-gym-instagram.xlang.ai",
+      "kind": "host",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_INSTAGRAM_URL__": {
+      "placeholder": "__CUA_GYM_INSTAGRAM_URL__",
+      "env": "CUA_GYM_INSTAGRAM_URL",
+      "default": "https://cua-gym-instagram.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_JIRA_URL__": {
+      "placeholder": "__CUA_GYM_JIRA_URL__",
+      "env": "CUA_GYM_JIRA_URL",
+      "default": "https://cua-gym-jira.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_LINKEDIN_URL__": {
+      "placeholder": "__CUA_GYM_LINKEDIN_URL__",
+      "env": "CUA_GYM_LINKEDIN_URL",
+      "default": "https://cua-gym-linkedin.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_MICROSOFT_TEAMS_URL__": {
+      "placeholder": "__CUA_GYM_MICROSOFT_TEAMS_URL__",
+      "env": "CUA_GYM_MICROSOFT_TEAMS_URL",
+      "default": "https://cua-gym-microsoft-teams.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_MOCK_APP_URL_TEMPLATE__": {
+      "placeholder": "__CUA_GYM_MOCK_APP_URL_TEMPLATE__",
+      "env": "CUA_GYM_MOCK_APP_URL_TEMPLATE",
+      "default": "https://cua-gym-{mock_name}.xlang.ai",
+      "kind": "url_template",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_MONDAY_URL__": {
+      "placeholder": "__CUA_GYM_MONDAY_URL__",
+      "env": "CUA_GYM_MONDAY_URL",
+      "default": "https://cua-gym-monday.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_NOTION_MOCK_URL__": {
+      "placeholder": "__CUA_GYM_NOTION_MOCK_URL__",
+      "env": "CUA_GYM_NOTION_MOCK_URL",
+      "default": "https://cua-gym-notion-mock.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_NOTION_URL__": {
+      "placeholder": "__CUA_GYM_NOTION_URL__",
+      "env": "CUA_GYM_NOTION_URL",
+      "default": "https://cua-gym-notion.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_OUTLOOK_WEB_HOST__": {
+      "placeholder": "__CUA_GYM_OUTLOOK_WEB_HOST__",
+      "env": "CUA_GYM_OUTLOOK_WEB_HOST",
+      "default": "cua-gym-outlook-web.xlang.ai",
+      "kind": "host",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_OUTLOOK_WEB_URL__": {
+      "placeholder": "__CUA_GYM_OUTLOOK_WEB_URL__",
+      "env": "CUA_GYM_OUTLOOK_WEB_URL",
+      "default": "https://cua-gym-outlook-web.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_PINTEREST_URL__": {
+      "placeholder": "__CUA_GYM_PINTEREST_URL__",
+      "env": "CUA_GYM_PINTEREST_URL",
+      "default": "https://cua-gym-pinterest.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_POSTMAN_URL__": {
+      "placeholder": "__CUA_GYM_POSTMAN_URL__",
+      "env": "CUA_GYM_POSTMAN_URL",
+      "default": "https://cua-gym-postman.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_REDDIT_URL__": {
+      "placeholder": "__CUA_GYM_REDDIT_URL__",
+      "env": "CUA_GYM_REDDIT_URL",
+      "default": "https://cua-gym-reddit.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_SALESFORCE_URL__": {
+      "placeholder": "__CUA_GYM_SALESFORCE_URL__",
+      "env": "CUA_GYM_SALESFORCE_URL",
+      "default": "https://cua-gym-salesforce.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_SHOPIFY_ADMIN_URL__": {
+      "placeholder": "__CUA_GYM_SHOPIFY_ADMIN_URL__",
+      "env": "CUA_GYM_SHOPIFY_ADMIN_URL",
+      "default": "https://cua-gym-shopify-admin.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_SLACK_URL__": {
+      "placeholder": "__CUA_GYM_SLACK_URL__",
+      "env": "CUA_GYM_SLACK_URL",
+      "default": "https://cua-gym-slack.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_STRIPE_DASHBOARD_URL__": {
+      "placeholder": "__CUA_GYM_STRIPE_DASHBOARD_URL__",
+      "env": "CUA_GYM_STRIPE_DASHBOARD_URL",
+      "default": "https://cua-gym-stripe-dashboard.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_TRELLO_HOST__": {
+      "placeholder": "__CUA_GYM_TRELLO_HOST__",
+      "env": "CUA_GYM_TRELLO_HOST",
+      "default": "cua-gym-trello.xlang.ai",
+      "kind": "host",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_TRELLO_URL__": {
+      "placeholder": "__CUA_GYM_TRELLO_URL__",
+      "env": "CUA_GYM_TRELLO_URL",
+      "default": "https://cua-gym-trello.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_TWITTER_URL__": {
+      "placeholder": "__CUA_GYM_TWITTER_URL__",
+      "env": "CUA_GYM_TWITTER_URL",
+      "default": "https://cua-gym-twitter.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_UBER_EATS_URL__": {
+      "placeholder": "__CUA_GYM_UBER_EATS_URL__",
+      "env": "CUA_GYM_UBER_EATS_URL",
+      "default": "https://cua-gym-uber-eats.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    },
+    "__CUA_GYM_WECHAT_URL__": {
+      "placeholder": "__CUA_GYM_WECHAT_URL__",
+      "env": "CUA_GYM_WECHAT_URL",
+      "default": "https://cua-gym-wechat.xlang.ai",
+      "kind": "url",
+      "description": "Replace this placeholder with the URL or host of your self-hosted CUA-Gym-Hub mock application before executing setup or reward files."
+    }
+  }
+}
