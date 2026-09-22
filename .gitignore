@@ -28,6 +28,8 @@ node_modules/
 .mock-state.json
 .mock-state.initial.json
 
+gym/hub/.playwright-mcp
+
 # ── CUA-Gym / OSWorld 运行期输出 ─────────────────────────────────────────
 gym/output/
 osworld/results*/
