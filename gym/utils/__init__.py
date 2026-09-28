@@ -6,6 +6,7 @@ This package provides common functionality used across all modules:
 - config: Configuration management
 - helpers: Common utility functions
 - llm_utils: Unified LLM calling utilities
+- ags_sandbox_env: AGS 沙箱环境封装（用于 CUA-Gym web task 的沙箱化执行）
 """
 
 from .logger import (
@@ -33,6 +34,12 @@ from .env import (
     EnvError,
 )
 
+from .ags_sandbox_env import (
+    SandboxEnv,
+    SandboxConfig,
+    SandboxEnvError,
+)
+
 __all__ = [
     'PipelineLogger',
     'LogLevel',
@@ -49,4 +56,7 @@ __all__ = [
     'Env',
     'EnvConfig',
     'EnvError',
+    'SandboxEnv',
+    'SandboxConfig',
+    'SandboxEnvError',
 ]
