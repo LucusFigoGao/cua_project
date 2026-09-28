@@ -378,12 +378,12 @@ print(r.stdout)
 
 ---
 
-## 10. 模型推理连通性验证（沙箱内部调用 ichat.woa.com）
+## 10. 模型推理连通性验证（沙箱内部调用 <ichat-woa>）
 
 **目的**：验证 agent 未来做决策要用的内部模型网关，能否从沙箱内部直接访问（决定 agent 主循环是否可以整体放进沙箱）。
 
 ```python
-r = sbx.commands.run("curl -sI --max-time 5 http://ichat.woa.com/api/external", user="root")
+r = sbx.commands.run("curl -sI --max-time 5 http://<ichat-woa>/api/external", user="root")
 print(r.stdout)
 ```
 
@@ -398,7 +398,7 @@ from openai import OpenAI
 
 client = OpenAI(
     api_key=os.environ["ICHAT_API_KEY"],
-    base_url="http://ichat.woa.com/api/external"
+    base_url="http://<ichat-woa>/api/external"
 )
 response = client.chat.completions.create(
     model="gpt-5",
