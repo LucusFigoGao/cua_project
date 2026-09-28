@@ -1,6 +1,6 @@
 # AGS All-In-One 沙箱使用指南
 
-本沙箱基于腾讯云 Agent Runtime（AGS）的 **All-In-One（AIO）沙箱**类型，兼容 E2B SDK，在单个实例中同时提供代码执行、终端、文件系统、浏览器自动化、远程桌面、VSCode Web IDE 等能力。
+本沙箱基于腾讯云 Agent Runtime（AGS）的 **All-In-One（AIO）沙箱**类型，兼容 E2B SDK，在单个实例中同时提供代码执行、终端、文件系统、浏览器自动化、远程桌面、VSCode Web IDE 等能力。4核8G
 
 ---
 
