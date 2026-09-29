@@ -1,34 +1,51 @@
+"""
+入口脚本：连接固定沙箱实例，部署 Hub、跑一条真实 task 的完整闭环、验证模型调用。
+"""
 import os
-import asyncio
-from playwright.async_api import async_playwright
-from e2b import Sandbox
-from IPython.display import IFrame
+import sys
 
-E2B_DOMAIN = os.environ.get("E2B_DOMAIN")
-E2B_API_KEY = os.environ.get("E2B_API_KEY")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "gym"))
+from utils import create_llm_caller, SandboxEnv
 
-# 创建浏览器沙箱，运行时间设置为 1 小时，template 需要替换为上述控制台新建的工具名称
-sandbox = Sandbox.create(template="browser-2qjk8ulodpe", timeout=3600)
-print(f"browser sandbox created: {sandbox.sandbox_id}")
+SANDBOX_ID = "edvcir3u2sbf3bigeg52ibdvkwkkx7htijlfbshy"
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "./configs/sandbox_config.json")
 
-novnc_url = f"https://{sandbox.get_host(9000)}/novnc/vnc_lite.html?&path=websockify?access_token={sandbox._envd_access_token}"
-# 打印 vnc url，您可以复制该 url 并在浏览器中打开，查看浏览器界面
-print(f"vnc url: {novnc_url}")
 
-# 通过 CDP 协议连接到远程浏览器
-async def main():
-    # 构建 CDP 连接 URL
-    cdp_url = f"https://{sandbox.get_host(9000)}/cdp"
+def main():
+    env = SandboxEnv.connect(SANDBOX_ID, hub_base_url="http://localhost:5173")
+    env.save_config(CONFIG_PATH)
+    print("已连接实例:", env.sbx.sandbox_id)
 
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.connect_over_cdp(
-            cdp_url, 
-            headers={"X-Access-Token": str(sandbox._envd_access_token)}
-        )
-        context = browser.contexts[0]
-        page = context.pages[0]
-        
-        # 导航到指定界面
-        await page.goto("https://tencent.com")
-        await page.wait_for_load_state("networkidle")
+    env.deploy_hub_app("notion_mock", port=5173)
+    print("notion_mock 已就绪")
 
+    task = env.find_task(app_type="notion_mock")
+    print("task:", task)
+
+    task_dir = env.download_task(
+        task_id=task["task_id"],
+        url_placeholder="__CUA_GYM_NOTION_URL__",
+        url_value="http://localhost:5173",
+    )
+
+    sid = env.run_initial_setup(task_dir)
+    print("sid:", sid)
+    env.save_config(CONFIG_PATH)
+
+    screenshot = env.screenshot(sid, local_out="task_initial.png")
+    print("截图已保存到本地 task_initial.png，字节数:", len(screenshot))
+
+    reward = env.run_reward(task_dir)
+    print("REWARD:", reward)
+
+    llm = create_llm_caller(
+        model="gpt-5",
+        api_key=os.environ["ICHAT_API_KEY"],
+        base_url="http://ichat.woa.com/api/external",
+    )
+    reply = llm.call_llm(prompt="Hello!", system_content="You are a helpful assistant.")
+    print("模型回复:", reply)
+
+
+if __name__ == "__main__":
+    main()
