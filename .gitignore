@@ -35,3 +35,6 @@ gym/hub/.playwright-mcp
 gym/output/
 osworld/results*/
 *.log
+gym/cache/
+
+configs/
