@@ -2,10 +2,8 @@
 入口脚本：连接固定沙箱实例，部署 Hub、跑一条真实 task 的完整闭环、验证模型调用。
 """
 import os
-import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "gym"))
-from utils import create_llm_caller, SandboxEnv
+from gym.utils import create_llm_caller, SandboxEnv
 
 SANDBOX_ID = "edvcir3u2sbf3bigeg52ibdvkwkkx7htijlfbshy"
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "./configs/sandbox_config.json")
