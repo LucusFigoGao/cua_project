@@ -2,7 +2,7 @@
 
 本文档记录了在腾讯云 Agent Runtime（AGS）All-In-One 沙箱中，验证 CUA-Gym web task 评测闭环的完整过程。每一步都配有实际跑通的代码，可直接复用。
 
-固定使用的沙箱实例：`edvcir3u2sbf3bigeg52ibdvkwkkx7htijlfbshy`（模板 `sdt-hojglb51`）。所有代码均从开发机通过 SDK `Sandbox.connect()` 连接到这个实例执行，**不会 kill 它**。
+固定使用的沙箱实例：`edvcir3u2sbf3bigeg52ibdvkwkkx7htijlfbshy`（模板 `sdt-2nn0tz4x`）。所有代码均从开发机通过 SDK `Sandbox.connect()` 连接到这个实例执行，**不会 kill 它**。
 
 ---
 

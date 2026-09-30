@@ -45,7 +45,7 @@ class PoolInstanceConfig:
 
 
 class SandboxPool:
-    def __init__(self, registry_path: Union[str, Path], template: str = "sdt-hojglb51",
+    def __init__(self, registry_path: Union[str, Path], template: str = "sdt-2nn0tz4x",
                  max_size: int = 12, timeout: int = 86400):
         self._registry_path = Path(registry_path)
         self.template = template

@@ -114,7 +114,7 @@ reset(task) → [ agent.predict(obs) → env.step(action) ] * max_steps → eval
 `tasks/catalog.py` 新增的是**批量筛选 + app 路由**：
 1. 读本地 `gym/bench/data/tasks.parquet`，过滤 `platform == "web"`（以及需要的话 `app_family == "mock_web"` / `cross_app`），产出任务队列。
 2. 每个任务的 `app_type` 需要映射到 `gym/hub/websites/<app_type>_mock` 这个目录名（99 个 mock app 命名基本规整，个别需要做别名表，例如大小写不一致的 `Canvas-LMS_mock` / `canvas_mock`、`Expensify_mock` 等）。
-3. **待确认的开放问题**：一个沙箱实例上，`deploy_hub_app` 目前默认把 app 起在固定端口 5173。如果同一批次里有多个不同 `app_type` 的任务落在同一个沙箱实例上，要么（a）每个 app 用不同端口全部预启动（"all-in-one" 沙箱如果镜像里已经装好全部 99 个 app，这是最优方案），要么（b）单实例同一时间只服务一个 app，换任务前先 kill 旧进程再重新 `npm run dev`（简单但有启动开销）。这个需要先确认 `sdt-hojglb51` 这个模板镜像里到底预置了什么（是否已经 clone 好 `CUA-Gym-Hub` 仓库、是否所有 99 个 app 的 `npm install` 已经提前跑过）。
+3. **待确认的开放问题**：一个沙箱实例上，`deploy_hub_app` 目前默认把 app 起在固定端口 5173。如果同一批次里有多个不同 `app_type` 的任务落在同一个沙箱实例上，要么（a）每个 app 用不同端口全部预启动（"all-in-one" 沙箱如果镜像里已经装好全部 99 个 app，这是最优方案），要么（b）单实例同一时间只服务一个 app，换任务前先 kill 旧进程再重新 `npm run dev`（简单但有启动开销）。这个需要先确认 `sdt-2nn0tz4x` 这个模板镜像里到底预置了什么（是否已经 clone 好 `CUA-Gym-Hub` 仓库、是否所有 99 个 app 的 `npm install` 已经提前跑过）。
 
 ### 问题 4：复用 `mm_agents`
 
@@ -146,7 +146,7 @@ from mm_agents.agent import PromptAgent
 
 ### ✅ 已确认
 
-**镜像内容（原问题 1）**：`sdt-hojglb51` 没有预制镜像，每次新建实例都需要从 git/HuggingFace clone CUA-Gym-Hub 并跑 `npm install`。单实例资源约 4C/8Gi。
+**镜像内容（原问题 1）**：`sdt-2nn0tz4x` 没有预制镜像，每次新建实例都需要从 git/HuggingFace clone CUA-Gym-Hub 并跑 `npm install`。单实例资源约 4C/8Gi。
 
 这个约束对架构有决定性影响，见下文"Pause 策略"一节。
 

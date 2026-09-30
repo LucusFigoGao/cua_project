@@ -28,7 +28,7 @@ class SandboxEnvError(Exception):
 class SandboxConfig:
     """可序列化的沙箱连接配置，供多次运行 / 多个脚本复用同一个实例。"""
     sandbox_id: str
-    template: str = "sdt-hojglb51"
+    template: str = "sdt-2nn0tz4x"
     hub_base_url: str = "http://localhost:5173"
     task_id: Optional[str] = None
     sid: Optional[str] = None
@@ -67,7 +67,7 @@ class SandboxEnv:
     # ---------- 工厂方法 ----------
 
     @classmethod
-    def create(cls, template: str = "sdt-hojglb51", timeout: int = 86400,
+    def create(cls, template: str = "sdt-2nn0tz4x", timeout: int = 86400,
                task_id: Optional[str] = None) -> "SandboxEnv":
         sbx = Sandbox.create(template=template, timeout=timeout)
         config = SandboxConfig(

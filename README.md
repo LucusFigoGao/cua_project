@@ -45,7 +45,7 @@ os.environ["E2B_DOMAIN"] = "ap-guangzhou.tencentags.com"
 os.environ["E2B_API_KEY"] = "your_api_key"
 
 sbx = Sandbox.create(
-    template="sdt-hojglb51",  # AGS 控制台创建的沙箱工具 ID
+    template="sdt-2nn0tz4x",  # AGS 控制台创建的沙箱工具 ID
     timeout=3600,             # 超时时间（秒），到期自动销毁，最长 86400（24h）
 )
 print("沙箱已启动，实例 ID：", sbx.sandbox_id)
@@ -296,7 +296,7 @@ from playwright.sync_api import sync_playwright
 os.environ["E2B_DOMAIN"] = "ap-guangzhou.tencentags.com"
 os.environ["E2B_API_KEY"] = "your_api_key"
 
-sbx = Sandbox.create(template="sdt-hojglb51", timeout=3600)
+sbx = Sandbox.create(template="sdt-2nn0tz4x", timeout=3600)
 print("沙箱已启动:", sbx.sandbox_id)
 
 try:
