@@ -28,7 +28,8 @@ workspace/
 ├── sandbox/
 │   ├── pool.py                        # ✅ SandboxPool：no-pause 常驻复用
 │   ├── deploy.py                       # ✅ 31-app 固定端口部署（~176s，幂等）
-│   └── pixel_env.py                     # M1：坐标动作 + a11y 快照（对应问题 2）
+│   ├── osworld_server.py                # ✅ 把 OSWorld agent server 装进沙箱常驻
+│   └── pixel_env.py                      # ✅ 瘦客户端：全屏观测 + pyautogui 动作
 ├── tasks/
 │   ├── urlmap.py                         # ✅ 占位符替换表（从 apps.json 推导）
 │   ├── catalog.py                         # ✅ 读 tasks_data/，筛选 + 分层取样
@@ -81,26 +82,84 @@ class SandboxPool:
 - pool 本身不知道 Hub app 部署细节：调用方用 `SandboxEnv.deploy_hub_app` 部署完成后调 `pool.mark_app_deployed()` 登记，后续 `acquire(app_type=...)` 优先复用已部署对应 app 的空闲实例。
 - `batch_runner.py` 就是这个 pool 的消费者：N 个 worker 线程，每个从任务队列取一个 task，`pool.acquire(app_type=...)` 拿一个空闲沙箱，跑完 `release()`（默认 `pause=True`）。
 
-### 问题 2：像素级动作优先，兼容 a11y 树（`sandbox/pixel_env.py`）
+### 问题 2：像素级动作优先 —— ✅ 已实现，但走的是 OSWorld server 而非自建 CDP 层
 
-不改 `gym/utils/ags_sandbox_env.py`，而是新写一个类，**优先复用**已有的 `SandboxEnv` 做沙箱管理相关的部分（`deploy_hub_app` / `run_initial_setup` / `run_reward` 直接调用），只重做"观测 + 动作"这两个方法：
+**最初设想（已废弃）**：编排进程 `get_host(9222)` 后用 playwright `connect_over_cdp` 保持常驻连接，自己写 `screenshot()` / `step()` / `get_a11y_tree()`。
 
-```python
-class PixelSandboxEnv:
-    def __init__(self, sandbox_env: SandboxEnv, viewport=(1280, 800)):
-        self._env = sandbox_env
-        self._cdp_url = f"https://{sandbox_env.sbx.get_host(9222)}"
-        # 用 playwright 建立一条常驻 CDP 连接，而不是每次动作都 write_and_run
-        ...
+这个方案被两个实测事实否掉：
 
-    def screenshot(self) -> bytes:            # 固定 viewport，不用 full_page，保证坐标系对齐
-    def step(self, action: dict) -> None:      # {"type": "click", "x":.., "y":..} / "type" / "key" / "scroll" / "move"
-    def get_a11y_tree(self) -> str:             # P1：page.accessibility.snapshot() 或 aria_snapshot()，返回给 agent 当文本观测
+**a) 模板没暴露任何沙箱端口**
+
+```
+5000 / 9222 / 8000 / 8018 / 5900 / 6080  →  HTTP 500
+{"code":310508,"message":"The requested sandbox endpoint is not configured.
+ Check that the sandbox port is exposed"}
 ```
 
-- P0：`click(x,y) / double_click / type_text / key_press / scroll / mouse_move`，全部走 CDP `page.mouse.*` / `page.keyboard.*`，坐标系和 `screenshot()` 的 viewport 严格一致。
-- P1：`get_a11y_tree()` 作为可选观测，配合 `mm_agents` 里 `observation_type in {"a11y_tree","screenshot_a11y_tree"}` 的 agent 变体。
-- 用 `get_host(9222)` 常驻连接代替"写脚本→上传→跑→解析 stdout"，单步延迟从秒级降到百毫秒级，这对 1505 个任务规模的评估吞吐很关键。
+只有 envd 自己的端口（49983）可达。鉴权本身是通的（带 `X-Access-Token` 能把 401 变成 500），卡的是端口没开；`Sandbox.create(network=SandboxNetworkOpts(allow_public_traffic=True, https_ports=[9222]))` 也无效——端口暴露是**模板级固定**的。所以"宿主直连沙箱内服务"这条路不存在，一切都得经 envd 的 `commands.run`。
+
+**b) 自建 CDP 层会和 `mm_agents` 的契约对不上**
+
+`osworld/mm_agents/` 下 50+ 个 agent（`uitars`、`openai_cua`、`anthropic`、`qwen`…）全部按 **"1920x1080 全屏截图 + `pyautogui` 代码"** 来 prompt。给浏览器 viewport（1280x800）的截图，模型的坐标判断会系统性偏移。契约在模型侧，适配它比改它便宜。
+
+**实际采用：复用 OSWorld 的 agent server。** 这也正是 cua-gym 在阿里云上的做法——`gym/utils/env.py` 开头写明 `cpfs02 server → Aliyun ECS VM (private IP:5000)`，那个 5000 端口就是 `osworld/desktop_env/server/main.py`，且 `Env` 的方法与 server 路由逐一对应：
+
+| `gym/utils/env.py` | OSWorld server 路由 |
+|---|---|
+| `screenshot()` | `GET /screenshot` |
+| `execute()` | `POST /setup/execute` |
+| `execute_python_command()` | `POST /execute`（argv 形式） |
+| `get_accessibility_tree()` | `GET /accessibility` |
+| `upload()` / `download()` | `POST /setup/upload` / `POST /file` |
+
+即 **cua-gym 的 `Env` 本身就是这个 server 的瘦客户端**，我们只是把底层从 ECS 换成 AGS 沙箱、把传输层从直连 HTTP 换成 envd + curl。
+
+落地的两个文件：
+
+```
+workspace/sandbox/
+├── osworld_server.py    把 osworld/desktop_env/server/main.py 装进沙箱并常驻拉起
+└── pixel_env.py         瘦客户端，方法名照 gym/utils/env.py
+```
+
+对上传副本做了两处最小改动（**`osworld/` 目录下的原文件不动**）：
+
+1. `pyatspi` 的模块级 import 包成 `try/except`。原文件在 Linux 分支无条件 `import pyatspi`，装不上就整个 server 起不来；它只被 `/accessibility` 和 `/terminal` 用到。
+2. `app.run(debug=True)` → `debug=False, use_reloader=False`。debug 模式会拉起 reloader 子进程，变成两个进程监听同一端口，`pkill` 容易留孤儿。
+
+部署上与 OSWorld 原版的三处差异（都是沙箱的客观约束）：不用 systemd（`osworld_server.service` 在沙箱里跑不了，改 `setsid`+`nohup`）；`DISPLAY=:1` 而非 service 文件里的 `:0`；**必须以默认用户 `user` 跑**，root 会被 chromium 拒（`Running as root without --no-sandbox is not supported`），只有装系统包那步用 root。
+
+#### 实测数据（活跃实例，11/11 验证通过）
+
+| 项 | 结果 |
+|---|---|
+| `/screenshot` | 1920x1080 PNG，约 550KB，**240-400ms** |
+| 画面非黑像素 | **98.6%**（chromium 窗口确实渲染在 Xvfb `:1` 上） |
+| 动作单步（move/click） | **约 540-600ms** |
+| **纯坐标点击+滚动改变画面** | **True** ← M1 的核心目标 |
+| `step("pyautogui.click(x=640, y=400)")` | 可直接执行 agent 原样输出 |
+| `computer_13`（MOVE_TO/CLICK/SCROLL/WAIT） | 正常 |
+| server 启动 | 约 4s，幂等二次调用 0.05s |
+
+单步 540ms 的构成实测为 **envd 往返 35ms + 起 python3 子进程 60ms + `import pyautogui` 416ms**。那 416ms 是 OSWorld 协议固有的：`/execute` 和 `/run_python` 都用 `subprocess` 执行，每个动作都要重新 import 一次 pyautogui，上游在真机上也是这个代价。相对 agent 一次推理（秒级）可忽略，且 OSWorld 默认每步后还会 sleep。若将来要压它，正确做法是给 server 加一个在 Flask 进程内 `exec` 的常驻路由，但那要改 OSWorld server，当前不做。
+
+#### ❌ a11y 树不可用（已确认，非阻塞）
+
+`python3-pyatspi` 装得上，但它依赖的 `_gi` 是为 **Python 3.13** 编译的 C 扩展，而沙箱 `python3` 是 **3.12**：
+
+```
+import pyatspi → ImportError: cannot import name '_gi' from partially initialized module 'gi'
+```
+
+要修得重做模板（装 3.13 或重编 pygobject），不是脚本层能解决的。所以：
+
+| `observation_type` | 可用 |
+|---|---|
+| `screenshot` | ✅ |
+| `a11y_tree` / `screenshot_a11y_tree` | ❌ |
+| `som`（set-of-mark，依赖 a11y 画框） | ❌ |
+
+`get_accessibility_tree()` 会显式抛错而不是静默返回空串，避免上层误以为拿到了空树。纯浏览器任务用 `screenshot` + `pyautogui` 已足够，这也是当前多数 CUA 模型（uitars、openai_cua）的主流配置。
 
 ### 问题 3：任务 loader，借鉴 OSWorld 的是"编排循环形状"而不是"schema"
 
@@ -154,7 +213,13 @@ sys.path.insert(0, str(OSWORLD_DIR))  # osworld/ 作为纯引用路径，不改�
 from mm_agents.agent import PromptAgent
 ```
 
-`agents/bridge.py` 只做一件事：把 `PixelSandboxEnv.screenshot()` / `get_a11y_tree()` 包成 `mm_agents` 期望的 `obs = {"screenshot": bytes, "a11y_tree": str}` 格式，再把 agent 吐出的 pyautogui/`computer_13` 动作解析成 `PixelSandboxEnv.step()` 能吃的 `{"type":...}` dict。这一层是唯一需要"翻译"的地方，`mm_agents` 内部代码零改动。
+**M1 改走 OSWorld server 后，这一层的工作量大幅缩小。** 原本设想 `agents/bridge.py` 要把 pyautogui / `computer_13` 动作"翻译"成自建 env 的 `{"type":...}` dict；现在 `PixelSandboxEnv` 直接说 OSWorld 的方言：
+
+- 观测：`env.get_obs()` 返回 `{"screenshot": bytes}`，就是 `mm_agents` 期望的 obs dict（已验证）
+- 动作：`env.step("pyautogui.click(x=640, y=400)")` 直接吃 agent 原样输出的字符串（已验证）
+- `computer_13`：`env.execute_action({"action_type": "CLICK", "parameters": {...}})`（已验证）
+
+所以 `agents/bridge.py` 退化成"构造 agent + 把 `predict()` 的返回喂给 `step()`"的胶水，不需要翻译层。约束是 `observation_type` 必须设 `"screenshot"`（a11y 不可用，见问题 2）。
 
 ---
 
@@ -163,7 +228,7 @@ from mm_agents.agent import PromptAgent
 | 阶段 | 内容 | 产出 | 依赖 |
 |---|---|---|---|
 | M0 | `sandbox/pool.py`：批量创建/连接/回收 + registry 落盘 | ✅ 已完成。`run.py` 走 reconcile → acquire → release(pause=False) 复用路径 | E2B_API_KEY（已具备） |
-| M1 | `sandbox/pixel_env.py`：CDP 常驻连接 + 坐标动作 + 固定 viewport 截图 | 单实例可用坐标点击跑通一个 mock app | M0。浏览器侧前置已清：chromium 常驻 + CDP 9222 在听（见 §4） |
+| M1 | `sandbox/osworld_server.py` + `pixel_env.py`：把 OSWorld agent server 装进沙箱常驻，瘦客户端经 envd 调用 | ✅ 已完成。全屏 1920x1080 观测 + pyautogui 坐标动作，纯坐标点击已验证能改变真实页面（`smoke_test/test_osworld_server.py` 11/11）。a11y 不可用 | M0 |
 | M2 | `tasks/`：筛选 web 任务、占位符替换、推送实例、跑通 setup→reward 闭环 | ✅ 任务侧已完成：1062 个任务入库，84 个（每 app 3 个）已推实例，setup→launch_gui→reward 全链路验证通过（`smoke_test/test_task_from_archive.py`）。待接 agent | M0 |
 | M3 | `agents/bridge.py` + `runner/single_task.py`：接入 `mm_agents.PromptAgent`，单实例单任务全链路（reset→agent loop→reward） | 一条完整轨迹 + 分数 | M1, M2 |
 | M4 | `runner/batch_runner.py`：多实例并行跑全量 web 任务集 | 全量评估报告（成功率/分数分布） | M0-M3 全部完成 |
@@ -227,7 +292,9 @@ from mm_agents.agent import PromptAgent
 
 ### ❓ 待确认
 
-**a11y 树 API**：CDP `page.accessibility.snapshot()`（旧，Playwright 标记为 deprecated）还是 `locator.aria_snapshot()`（新，纯文本树，格式不同）？建议 M1 阶段做一个小 spike：对同一个 mock app 页面同时调两个 API，对比输出格式，再决定 `mm_agents` 里对应的 `observation_type` 配置方式。
+**~~a11y 树 API~~ ✅ 已确认：不可用，且与 API 选型无关。** 原问题是"`page.accessibility.snapshot()` 还是 `locator.aria_snapshot()`"，但那是 playwright（DOM 级）的选项；改走 OSWorld server 后 a11y 来自 `pyatspi`（桌面级），而它在本沙箱 import 不了（Python 3.12 vs `_gi` 的 3.13 ABI）。详见问题 2。当前只用 `observation_type="screenshot"`。
+
+（备注：若日后改回 playwright 路线，实测 `locator.aria_snapshot()` 可用、`page.accessibility` 在 Playwright 1.63 已被**整个移除**而非仅标记 deprecated。）
 
 **~~1505 vs 1075 的口径~~ ✅ 已确认**：`gym/bench/data/tasks.parquet` 共 10910 行，`platform` 分布为 `desktop` 8029 / `web` 1075 / `cross_app` 430。其中落在 31 个 mock app 内的 web 任务 1067 个，再扣掉 5 个上游数据瑕疵任务（见问题 3），**实际可用 1062 个**。1505 既不是 web 也不是 web+cross_app（=1505 恰好等于 1075+430，所以那个数字应当就是 web + cross_app 的合集口径）。本次只纳入 web，`cross_app` 的 430 个未处理。另有 8 个 `app_type=="mock_websites"` 的跨 app 任务（如 Stripe→Gmail），其 app_type 不在 31 个之列，当前被自动过滤。
 
@@ -265,6 +332,9 @@ python workspace/push_tasks.py --dry-run              # 只看选中了哪些，
 
 # 端到端验证：setup → launch_gui(CDP 检查) → reward
 python workspace/smoke_test/test_task_from_archive.py
+
+# M1 验证：OSWorld server 常驻 + 全屏观测 + 纯坐标动作真的改变页面
+python workspace/smoke_test/test_osworld_server.py
 ```
 
 以上脚本**都不会 kill 实例**，跑完 `release(pause=False)` 让实例回到 idle 继续复用。

@@ -46,8 +46,12 @@ configs/
 workspace/configs/*
 !workspace/configs/apps.json
 
-workspace/smoke_test
-!workspace/smoke_test/
+# 冒烟测试是 M0/M1/M2 的验证依据，进版本库（上一次提交已把 6 个脚本纳入跟踪）。
+# 注意：这里不能写 `workspace/smoke_test` 再加 `!` 例外——被不带斜杠的模式排除掉
+# 目录之后，对子文件的反向例外不生效，新增的测试文件会被静默忽略。
 workspace/tasks_data/*
+
+# 评估产出：轨迹 json + 逐步截图，由 run_task.py 生成，可重跑复现，不进版本库
+workspace/results/
 
 .cache
