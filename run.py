@@ -39,7 +39,8 @@ def main():
     llm = create_llm_caller(
         model="gpt-5",
         api_key=os.environ["ICHAT_API_KEY"],
-        base_url="http://ichat.woa.com/api/external",
+        # base_url="http://ichat.woa.com/api/external",
+        base_url=os.environ["ICHAT_BASE_URL"],
     )
     reply = llm.call_llm(prompt="Hello!", system_content="You are a helpful assistant.")
     print("模型回复:", reply)
