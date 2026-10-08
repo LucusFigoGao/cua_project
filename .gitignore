@@ -38,3 +38,5 @@ osworld/results*/
 gym/cache/
 
 configs/
+
+workspace/smoke_test
