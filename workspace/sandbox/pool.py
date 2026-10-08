@@ -1,11 +1,12 @@
 """
-SandboxPool: 基于 e2b pause/resume 的沙箱实例池。
+SandboxPool: 基于 e2b 长运行沙箱的实例池。
 
-不依赖预制镜像——每个实例首次创建后按需部署 app，之后只在 pause/resume 之间
-循环复用，避免为每个任务重复 git clone + npm install。本模块只管沙箱生命周期
-（create/pause/resume/kill/registry），不耦合任何 Hub app 部署细节，
-部署动作由调用方通过 gym.utils.SandboxEnv.deploy_hub_app 完成后回调
-mark_app_deployed() 登记。
+不依赖预制镜像——每个实例首次 acquire 时自动部署全部 31 个固定端口 mock app
+（见 deploy.py，实测 170-290s），之后保持 running 状态循环复用（复用耗时 0-1s），
+避免为每个任务重复 git clone + npm install + build。
+
+pause/resume 在当前 AGS 部署（模板 sdt-hojglb51）上 resume 会 500，因此
+release 默认 pause=False，acquire 直接 connect 运行中的实例。
 """
 import json
 import os
@@ -17,6 +18,8 @@ from typing import Optional, Union
 
 from e2b import Sandbox
 from e2b.sandbox.sandbox_api import SandboxQuery
+
+from . import deploy
 
 POOL_TAG = {"pool": "cua_gym"}
 
@@ -34,6 +37,7 @@ class PoolInstanceConfig:
     current_task_id: Optional[str] = None
     app_type: Optional[str] = None
     deployed_apps: dict = field(default_factory=dict)  # app_name -> port
+    apps_ready: bool = False  # 31 个 app 是否已全部部署并可访问
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -45,7 +49,7 @@ class PoolInstanceConfig:
 
 
 class SandboxPool:
-    def __init__(self, registry_path: Union[str, Path], template: str = "sdt-2nn0tz4x",
+    def __init__(self, registry_path: Union[str, Path], template: str = "sdt-hojglb51",
                  max_size: int = 12, timeout: int = 86400):
         self._registry_path = Path(registry_path)
         self.template = template
@@ -115,25 +119,69 @@ class SandboxPool:
     # ---------- 获取 / 归还 ----------
 
     def acquire(self, app_type: Optional[str] = None, block: bool = True,
-                timeout: Optional[float] = None, max_resume_retries: int = 2) -> tuple[PoolInstanceConfig, Sandbox]:
+                timeout: Optional[float] = None, max_retries: int = 2,
+                ensure_apps: bool = True) -> tuple[PoolInstanceConfig, Sandbox]:
+        """
+        取一个可用实例。默认保证返回的沙箱已经部署好全部 31 个 app
+        （首次拿到新实例时会触发一次 ~176s 的部署，之后复用不再重跑）。
+
+        任何一个 app 起不来都视为坏实例：kill 掉并重新创建，不会把半残的实例交出去。
+        ensure_apps=False 可跳过部署，仅用于只需要裸沙箱的场景（如烟雾测试）。
+        """
         last_err = None
-        for _ in range(max_resume_retries + 1):
+        for _ in range(max_retries + 1):
             with self._cond:
                 cfg = self._select_or_create_locked(app_type, block, timeout)
                 handle = self._pending_handles.pop(cfg.sandbox_id, None)
 
-            if handle is not None:
-                return cfg, handle
-            try:
-                sbx = Sandbox.connect(cfg.sandbox_id, timeout=self.timeout, on_resume="restore")
+            sbx = handle
+            if sbx is None:
+                try:
+                    sbx = Sandbox.connect(cfg.sandbox_id, timeout=self.timeout)
+                except Exception as e:
+                    last_err = e
+                    self._drop_dead_locked(cfg.sandbox_id)
+                    continue
+
+            if not ensure_apps:
                 return cfg, sbx
+
+            try:
+                if not self._ensure_apps_ready(cfg, sbx):
+                    last_err = SandboxPoolError(
+                        f"实例 {cfg.sandbox_id} 部分 app 未就绪，已销毁重建")
+                    self._drop_dead_locked(cfg.sandbox_id)
+                    continue
             except Exception as e:
                 last_err = e
                 self._drop_dead_locked(cfg.sandbox_id)
-        raise SandboxPoolError(f"resume 连续失败 {max_resume_retries + 1} 次，放弃: {last_err}")
+                continue
+
+            return cfg, sbx
+        raise SandboxPoolError(f"acquire 连续失败 {max_retries + 1} 次，放弃: {last_err}")
+
+    def _ensure_apps_ready(self, cfg: PoolInstanceConfig, sbx: Sandbox) -> bool:
+        """保证实例上 31 个 app 全部就绪。已就绪的实例直接返回 True，不重复部署。"""
+        if cfg.apps_ready:
+            return True
+
+        status = deploy.deploy_all_apps(sbx)
+        ready = bool(status) and all(status.values())
+
+        with self._cond:
+            current = self._instances.get(cfg.sandbox_id)
+            if current is not None:
+                current.apps_ready = ready
+                if ready:
+                    current.deployed_apps = dict(deploy.load_app_ports())
+                self._save()
+        cfg.apps_ready = ready
+        if ready:
+            cfg.deployed_apps = dict(deploy.load_app_ports())
+        return ready
 
     def _drop_dead_locked(self, sandbox_id: str) -> None:
-        """resume/connect 失败时的清理：尝试 kill 掉这个已经坏掉的实例，并从 registry 移除，好让下一轮重新创建。"""
+        """connect 失败或 app 部署不全时的清理：kill 掉坏实例并从 registry 移除，好让下一轮重新创建。"""
         try:
             Sandbox.kill(sandbox_id)
         except Exception:
@@ -187,7 +235,7 @@ class SandboxPool:
         self._save()
         return cfg
 
-    def release(self, sandbox_id: str, sbx: Optional[Sandbox] = None, pause: bool = True) -> None:
+    def release(self, sandbox_id: str, sbx: Optional[Sandbox] = None, pause: bool = False) -> None:
         if pause:
             live = sbx or Sandbox.connect(sandbox_id, timeout=self.timeout)
             live.pause()
