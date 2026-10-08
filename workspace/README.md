@@ -114,7 +114,7 @@ reset(task) → [ agent.predict(obs) → env.step(action) ] * max_steps → eval
 `tasks/catalog.py` 新增的是**批量筛选 + app 路由**：
 1. 读本地 `gym/bench/data/tasks.parquet`，过滤 `platform == "web"`（以及需要的话 `app_family == "mock_web"` / `cross_app`），产出任务队列。
 2. 每个任务的 `app_type` 需要映射到 `gym/hub/websites/<app_type>_mock` 这个目录名（99 个 mock app 命名基本规整，个别需要做别名表，例如大小写不一致的 `Canvas-LMS_mock` / `canvas_mock`、`Expensify_mock` 等）。
-3. **待确认的开放问题**：一个沙箱实例上，`deploy_hub_app` 目前默认把 app 起在固定端口 5173。如果同一批次里有多个不同 `app_type` 的任务落在同一个沙箱实例上，要么（a）每个 app 用不同端口全部预启动（"all-in-one" 沙箱如果镜像里已经装好全部 99 个 app，这是最优方案），要么（b）单实例同一时间只服务一个 app，换任务前先 kill 旧进程再重新 `npm run dev`（简单但有启动开销）。这个需要先确认 `sdt-2nn0tz4x` 这个模板镜像里到底预置了什么（是否已经 clone 好 `CUA-Gym-Hub` 仓库、是否所有 99 个 app 的 `npm install` 已经提前跑过）。
+3. **✅ 已确认**：任务 setup 文件把 mock app URL 硬编码为 `http://host.docker.internal:8000`~`8030`，不是任意端口路由问题，而是**同一个沙箱实例必须同时跑满这 31 个固定 app**（不是全部 99 个，是 `tasks_web` metadata 里筛出的 31 个子集，字母序对应端口 8000→8030）。已用 `smoke_test/test_deploy.py` 在模板 `sdt-hojglb51`（8GB 盘/4C/7.8GB 内存）上验证：git clone 8s + npm install（31 个串行）97s + npm run build（8 并发批量）58s + tmux 起 31 个 `vite preview` 12s = **总耗时 176s**，31/31 端口返回 200，磁盘占用 60%（4.5G/8G）。单实例装满 31 个 app 完全可行。
 
 ### 问题 4：复用 `mm_agents`
 
@@ -146,9 +146,9 @@ from mm_agents.agent import PromptAgent
 
 ### ✅ 已确认
 
-**镜像内容（原问题 1）**：`sdt-2nn0tz4x` 没有预制镜像，每次新建实例都需要从 git/HuggingFace clone CUA-Gym-Hub 并跑 `npm install`。单实例资源约 4C/8Gi。
+**镜像内容（原问题 1）**：最终选定模板 `sdt-hojglb51`（all-in-one，8GB 盘/4C/7.8GB 内存），没有预制镜像，每次新建实例都要从 git clone CUA-Gym-Hub 并跑 31 个 app 的 `npm install` + `npm run build`。实测总耗时 176s（见上文问题 3）。
 
-这个约束对架构有决定性影响，见下文"Pause 策略"一节。
+这个约束对架构有决定性影响，见下文"实例复用策略"一节。
 
 **并发配额（原问题 2）**：AGS 账号单地域限制如下：
 
@@ -161,24 +161,20 @@ from mm_agents.agent import PromptAgent
 
 有效并发上限：**12 个实例**（CPU 和内存约束同时压住，取 min(12, 12) = 12）。
 
-### Pause 策略（由"无预制镜像"推导出）
+### 实例复用策略（由"无预制镜像 + 固定 31-app 部署"推导出，no-pause 常驻复用）
 
-无法预制镜像意味着每个新实例都要执行：
+无法预制镜像意味着每个新实例首次使用都要执行一次性的部署（clone + 31 个 app 的 install/build + tmux 起 31 个 `vite preview`，实测 176s）。如果每个任务跑完就 kill 实例，再新建时重复这一整套，cost 远超任务本身执行时间，跑 1500 个任务基本不可行。
 
-1. `git clone CUA-Gym-Hub`（网络耗时，约 30-60s）
-2. `npm install`（每个 app，约 60-120s）
-3. `npm run dev`（启动服务，约 5-15s）
+**曾经考虑过的方案**：e2b 的 pause/resume（`sbx.pause()` + `Sandbox.connect(sandbox_id, on_resume='restore')`）。在模板 `sdt-hojglb51` 上实测 resume 连续 4/4 失败（`500 InternalError.Unknown`），`pause()` 本身会把实例切到 STOPPED 而非 PAUSED，**已放弃**，详见 memory `ags_resume_blocked`。
 
-如果每个任务跑完就 kill 实例，再新建时重复以上三步，cost 远超任务本身执行时间，跑 1500 个任务基本不可行。
+**实际采用的做法：no-pause 常驻复用**——任务间不 pause/kill 实例，只是标记 idle/busy：
 
-**正确做法**：利用 e2b 的 pause/resume（实例方法 `sbx.pause(keep_memory=...)` + `Sandbox.connect(sandbox_id, on_resume='restore')`，已用 `inspect` 核实真实签名）在任务间保留实例状态：
+- 每个实例首次创建时部署好全部 31 个 app（一次性 clone + install + build + tmux 起 vite preview），然后保持 running，状态标记为 idle。
+- 调度器需要实例时直接 `Sandbox.connect(sandbox_id)` 复用，不传 `on_resume`；任务完成后 `release(pause=False)`，实例继续 running 回到 idle，而不是 pause/kill。
+- 真正需要 kill 的场景：实例异常、pool 需要缩减。
+- 由于每个实例都部署全部 31 个 app（不是按 app_type 分流的单 app 实例），"app 类型切换"不存在——任何空闲实例都能服务任何 app_type 的任务。
 
-- 每个实例首次创建时部署好需要的 mock app（一次性 clone + npm install），然后 pause。
-- 调度器需要实例时 resume，任务完成后再次 pause，而不是 kill。
-- 20 个 pause slot 对应 20 个预热实例（每个可以部署不同的 app，也可以同一 app 多副本）。
-- 真正需要 kill 的场景：实例异常、pool 需要缩减、app 类型需要切换但 pause 槽满了。
-
-这个策略让实际的 clone+install 只发生一次（per 实例 lifetime），大幅提升吞吐。`SandboxPool`（`workspace/sandbox/pool.py`，已实现）的 `acquire/release` 就是 **pause/resume** 语义，而不是 create/kill；`Sandbox.create(metadata=...)` + `Sandbox.list(query=SandboxQuery(metadata=...))` 被用作 registry 的校准真相源（`reconcile()`）。
+这个策略让实际的 clone+install+build 只发生一次（per 实例 lifetime，176s），大幅提升吞吐。`SandboxPool`（`workspace/sandbox/pool.py`，已实现）的 `acquire/release` 默认是 **no-pause 复用**语义（`release(pause=False)`），不是 pause/resume 也不是 create/kill；`Sandbox.create(metadata=...)` + `Sandbox.list(query=SandboxQuery(metadata=...))` 被用作 registry 的校准真相源（`reconcile()`）。`pause=True` 路径仍保留在代码里但不作为默认路径使用。
 
 ### ❓ 待确认
 
