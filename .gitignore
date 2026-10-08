@@ -35,3 +35,19 @@ gym/hub/.playwright-mcp
 gym/output/
 osworld/results*/
 *.log
+gym/cache/
+
+configs/
+
+# workspace 下的配置区分对待：apps.json 是 31 个 app→固定端口的唯一事实来源，
+# sandbox/deploy.py 和 tasks/urlmap.py 运行时都要读它，必须进版本库；
+# sandbox_pool.json 是运行期状态（实例 id），不进。
+!workspace/configs/
+workspace/configs/*
+!workspace/configs/apps.json
+
+workspace/smoke_test
+!workspace/smoke_test/
+workspace/tasks_data/*
+
+.cache
