@@ -35,7 +35,7 @@ SCREEN_W, SCREEN_H = 1920, 1080
 # 模型：qwen3.x 先输出思维链再给 content，max_tokens 给小了 content 会为空。
 # 实测 3000 不够一步的思维链，截断后 content 为空，所以给到 8000。
 DEFAULT_MODEL = "qwen3.8-max"
-DEFAULT_MAX_TOKENS = 8000
+DEFAULT_MAX_TOKENS = 16384
 
 # AGS 域名不走代理
 os.environ.setdefault("NO_PROXY", "*.tencentags.com,*.woa.com,*.tencentyun.com")

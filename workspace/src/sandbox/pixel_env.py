@@ -284,6 +284,56 @@ class PixelSandboxEnv:
 
     # ---------- 浏览器便捷入口 ----------
 
+    def list_tabs(self) -> list[dict]:
+        """
+        列出 chromium 里所有的 page target。
+
+        沙箱复用后标签页会一直累积（launch_gui 每次开一个，没人关），所以
+        跑任务前需要知道当前有几个。CDP 的 /json/list 返回 JSON 数组。
+        """
+        out = self.execute("curl -s -m 5 http://127.0.0.1:9222/json/list")
+        raw = (out or {}).get("output") if isinstance(out, dict) else out
+        raw = raw if isinstance(raw, str) else ""
+        try:
+            targets = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        return [t for t in targets if t.get("type") == "page"]
+
+    def close_tab(self, target_id: str) -> None:
+        self.execute(f"curl -s -m 5 http://127.0.0.1:9222/json/close/{target_id}")
+
+    def reset_tabs(self) -> dict:
+        """
+        把浏览器收敛到只剩一个 about:blank，保持观测可复现。
+
+        实例是复用的，每个任务的 launch_gui 都会新开一个标签页且从不关闭，于是
+        标签数量随跑过的任务数单调增长。截图里标签栏属于画面的一部分，标签越多
+        每个标签越窄、干扰项越多，同一任务的观测就不再可比 —— 对 grounding 测量
+        是直接污染。所以每次 agent 开始操作前先归零。
+
+        顺序是**先建后关**：先开一个新的 about:blank，再关掉原有的全部标签。
+        反过来（关光再补建）会让浏览器出现没有任何页面的瞬间，那一刻 /json/new
+        不可靠（实测返回了但页面没建起来）。
+
+        返回 {"before", "after", "closed"}。
+        """
+        before_tabs = self.list_tabs()
+        before = len(before_tabs)
+
+        # 先占住一个页面，确保接下来关标签时浏览器不会归零
+        self.execute("curl -s -m 5 -X PUT 'http://127.0.0.1:9222/json/new?about:blank'")
+
+        closed = 0
+        for t in before_tabs:
+            tid = t.get("id")
+            if not tid:
+                continue
+            self.close_tab(tid)
+            closed += 1
+
+        return {"before": before, "after": len(self.list_tabs()), "closed": closed}
+
     def open_url(self, url: str) -> dict:
         """
         在沙箱的常驻 chromium 里打开一个 URL。

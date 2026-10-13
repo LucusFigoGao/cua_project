@@ -101,6 +101,12 @@ def main() -> int:
         env = PixelSandboxEnv(sbx, install=False)
 
         print("[ 1/4 ] 注入初始状态（initial_setup.py）...")
+        # 实例是复用的，之前任务 launch_gui 开的标签页还留着（没人关）。截图里标签栏
+        # 是画面的一部分，残留标签既改变版面又是干扰项，必须先归零。
+        tabs = env.reset_tabs()
+        if tabs["closed"]:
+            print(f"        清理残留标签 {tabs['closed']} 个"
+                  f"（{tabs['before']} → {tabs['after']}）")
         sbx.commands.run("rm -f /tmp/task_web_sid", timeout=30)
         sbx.commands.run(
             f"cd {push.REMOTE_ROOT}/{task_id} && DISPLAY=:1 python3 initial_setup.py "
