@@ -18,28 +18,21 @@ agent 也都按"全屏截图 + pyautogui 代码"来 prompt。所以这里复用 
   8. pool.release         —— 实例保持 running，不 kill
 
 Usage:
-    python workspace/smoke_test/test_osworld_server.py [task_id]
+    python -m src.smoke_test.test_osworld_server [task_id]
 """
-import json
 import os
 import struct
 import sys
 import time
 from pathlib import Path
 
-WORKSPACE = Path(__file__).parent.parent
-sys.path.insert(0, str(WORKSPACE))
-
 os.environ.setdefault("NO_PROXY", "*.tencentags.com,*.woa.com,*.tencentyun.com")
 
-from sandbox import osworld_server as osw
-from sandbox.pixel_env import PixelEnvError, PixelSandboxEnv
-from sandbox.pool import SandboxPool
-from tasks import catalog, push
+from src.sandbox import osworld_server as osw
+from src.sandbox.pixel_env import PixelEnvError, PixelSandboxEnv
+from src.sandbox.pool import SandboxPool
+from src.tasks import catalog, push
 
-TEMPLATE = "sdt-hojglb51"
-TIMEOUT = 86400
-REGISTRY = WORKSPACE / "configs" / "sandbox_pool.json"
 OUT_DIR = Path("/tmp/osworld_shots")
 
 _passed: list[str] = []
@@ -82,7 +75,7 @@ def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     local = {t.task_id: t for t in catalog.load_tasks()}
-    pool = SandboxPool(REGISTRY, template=TEMPLATE, max_size=12, timeout=TIMEOUT)
+    pool = SandboxPool()
     pool.reconcile()
 
     _section("1. pool.acquire（复用已部署实例）")
@@ -232,8 +225,8 @@ def main() -> int:
 
     finally:
         _section("release（不 kill）")
-        pool.release(cfg.sandbox_id, sbx=sbx, pause=False)
-        final = pool._instances.get(cfg.sandbox_id)
+        pool.release(cfg.sandbox_id)
+        final = pool.get(cfg.sandbox_id)
         print(f"  {cfg.sandbox_id}  status={final.status if final else '?'}  实例保持 running")
 
 
@@ -244,7 +237,7 @@ def _summary() -> int:
         print(f"    [FAIL] {f}")
     if not _failed:
         print("\n  OSWorld server 在 AGS 沙箱里跑通：全屏观测 + pyautogui 动作，")
-        print("  mm_agents 的 obs/action 契约可直接对接，M3 不需要写翻译层。")
+        print("  mm_agents 的 obs/action 契约可直接对接。")
     return 0 if not _failed else 1
 
 

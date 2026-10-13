@@ -2,18 +2,15 @@
 把本地 tasks_data/ 里选中的任务推送到沙箱实例。
 
 两件事：
-  1. 打成单个 tar.gz 一次上传。逐文件 sbx.files.write 不现实——单个 initial_setup.py
+  1. 打成单个 tar.gz 一次上传。逐文件 sbx.files.write 不现实：单个 initial_setup.py
      可达 85KB，上千任务是两千多次往返。
   2. 装 google-chrome shim。任务脚本末尾都有一行
-     `launch_gui(f'google-chrome "{BASE_URL}/?sid={sid}"')`，而 all-in-one 模板里
-     浏览器叫 /usr/bin/chromium，没有 google-chrome 这个名字。实例里 chromium 由 s6
-     托管常驻运行（DISPLAY=:1，CDP 9222 已监听），shim 转发过去会让它在**已有浏览器
-     会话**里开 tab（输出 "Opening in existing browser session."），页面随即出现在
-     CDP target 列表里。
+     `launch_gui(f'google-chrome "{BASE_URL}/?sid={sid}"')`，而模板里浏览器叫
+     /usr/bin/chromium。实例里 chromium 由 s6 托管常驻（DISPLAY=:1，CDP 9222 已监听），
+     shim 转发过去会让它在已有浏览器会话里开 tab，页面随即出现在 CDP target 列表里。
 
-     注意 shim 必须以默认用户（user）被调用：chromium 拒绝以 root 运行而不加
-     --no-sandbox。写 /usr/local/bin 本身需要 root，所以只有建 shim 这一步用 root，
-     跟 deploy.ensure_host_mapping 写 /etc/hosts 的处理方式一致。
+     shim 必须以默认用户（user）被调用：chromium 拒绝以 root 运行而不加 --no-sandbox。
+     写 /usr/local/bin 需要 root，所以只有建 shim 这一步用 root。
 """
 import json
 import tarfile
@@ -24,7 +21,9 @@ from typing import Iterable
 
 from e2b import Sandbox
 
-REMOTE_ROOT = "/tmp/cua_tasks"
+from src.settings import REMOTE_TASK_ROOT
+
+REMOTE_ROOT = REMOTE_TASK_ROOT
 CHROME_SHIM = "/usr/local/bin/google-chrome"
 CHROMIUM_BIN = "/usr/bin/chromium"
 UPLOAD_TMP = "/tmp/_cua_tasks_upload.tar.gz"

@@ -1,47 +1,44 @@
 """
 把 osworld/mm_agents 的 agent 接到 PixelSandboxEnv 上。
 
-能直接复用的部分（从 osworld/ 原样 import，不改动那边代码）：
-  - mm_agents.prompts.SYS_PROMPT_IN_SCREENSHOT_OUT_CODE  系统提示词
-  - mm_agents.agent.parse_code_from_string               从模型回复里抠出 ```python``` 代码块
-  - mm_agents.agent.encode_image                         图片转 base64
+提示词和动作解析从 osworld/ 原样 import（SYS_PROMPT_IN_SCREENSHOT_OUT_CODE、
+parse_code_from_string），保证 agent 行为与 OSWorld baseline 一致。
 
-唯一不能直接用 PromptAgent 的原因是**它的 HTTP 调用层和 ichat 不兼容**：
+不直接用 mm_agents.PromptAgent，因为它的 HTTP 层与 ichat 不兼容：
 
-    agent.py:620  elif self.model.startswith("gpt"):          ← 只有 gpt* 走 OPENAI_BASE_URL
-    agent.py:624  api_url = base_url.endswith('/v1')
-                      and f"{base_url}/chat/completions"
-                      or  f"{base_url}/v1/chat/completions"    ← 两种拼法都带 /v1
+    agent.py:620  elif self.model.startswith("gpt"):      ← 只有 gpt* 走 OPENAI_BASE_URL
+    agent.py:624  两种 URL 拼法都带 /v1
 
-而 ichat 的真实路径是 `{ICHAT_BASE_URL}/chat/completions`（**不带 /v1**，实测带 /v1
-一律 404）。另外 model="qwen*" 在 agent.py:1028 会走 dashscope SDK（阿里云原生 API），
-不走 ichat 的 OpenAI 兼容端点。两条路都堵，所以这里自己发请求，但**提示词和动作解析
-仍然复用 mm_agents 的**——保证 agent 行为与 OSWorld 一致。
+而 ichat 的真实路径是 `{ICHAT_BASE_URL}/chat/completions`，带 /v1 一律 404；
+model="qwen*" 还会在 agent.py:1028 走 dashscope SDK 而不是 ichat 的 OpenAI 兼容端点。
+两条路都堵，所以这里自己发请求。若 ichat 日后支持 /v1，ScreenshotAgent 可整个删掉
+改用 PromptAgent。
 
-如果以后 ichat 支持了 /v1 前缀，或者换成原生 OpenAI/Anthropic endpoint，直接改用
-mm_agents.agent.PromptAgent 即可，本文件的 ScreenshotAgent 可以整个删掉。
-
-观测/动作的契约（已在 smoke_test/test_osworld_server.py 验证）：
+观测/动作契约（由 smoke_test/test_osworld_server.py 验证）：
     obs    = {"screenshot": bytes}            PixelSandboxEnv.get_obs()
     action = "pyautogui.click(x=.., y=..)"    PixelSandboxEnv.step() 直接吃
 """
 import base64
 import json
 import os
-import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Optional, Union
+from typing import Union
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-OSWORLD_DIR = PROJECT_ROOT / "osworld"
-if str(OSWORLD_DIR) not in sys.path:
-    sys.path.insert(0, str(OSWORLD_DIR))
+# mm_agents 在 osworld/ 下，不是本包的一部分：显式加 path，
+# 否则能否 import 取决于调用方的 cwd / PYTHONPATH。
+import sys
 
-from mm_agents.agent import parse_code_from_string  # noqa: E402
-from mm_agents.prompts import SYS_PROMPT_IN_SCREENSHOT_OUT_CODE  # noqa: E402
+from src.settings import PROJECT_ROOT
+
+_OSWORLD = str(PROJECT_ROOT / "osworld")
+if _OSWORLD not in sys.path:
+    sys.path.insert(0, _OSWORLD)
+
+from mm_agents.agent import parse_code_from_string
+from mm_agents.prompts import SYS_PROMPT_IN_SCREENSHOT_OUT_CODE
 
 SPECIAL = ("WAIT", "DONE", "FAIL")
 
@@ -78,9 +75,11 @@ class ScreenshotAgent:
     def __init__(self, model: str = "qwen3.8-max", max_tokens: int = 1500,
                  temperature: float = 0.5, top_p: float = 0.9,
                  max_trajectory_length: int = 3, client_password: str = "password",
-                 timeout: int = 180, retries: int = 3):
+                 timeout: int = 180, retries: int = 3,
+                 max_token_ceiling: int = 16000):
         self.model = model
         self.max_tokens = max_tokens
+        self.max_token_ceiling = max_token_ceiling
         self.temperature = temperature
         self.top_p = top_p
         self.max_trajectory_length = max_trajectory_length
@@ -153,11 +152,12 @@ class ScreenshotAgent:
             "temperature": self.temperature,
             "top_p": self.top_p,
         }
-        req_body = json.dumps(payload).encode()
         last = None
+        budget = self.max_tokens
         for attempt in range(self.retries):
+            payload["max_tokens"] = budget
             req = urllib.request.Request(
-                _chat_url(), data=req_body,
+                _chat_url(), data=json.dumps(payload).encode(),
                 headers={"Authorization": f"Bearer {_api_key()}",
                          "Content-Type": "application/json"})
             try:
@@ -169,10 +169,12 @@ class ScreenshotAgent:
                     return content
                 # 部分模型（qwen3.x 系列）把预算花在 reasoning_content 上，
                 # max_tokens 给太小会导致 content 为空。这不是"没视觉"，是被截断了。
+                # 重试时翻倍预算，否则同样的 max_tokens 重试几次都是空。
                 det = (data.get("usage") or {}).get("completion_tokens_details") or {}
                 last = (f"模型返回空 content（reasoning_tokens="
-                        f"{det.get('reasoning_tokens')}，max_tokens={self.max_tokens}）。"
-                        f"该模型会先输出思维链，请调大 max_tokens。")
+                        f"{det.get('reasoning_tokens')}，max_tokens={budget}）。"
+                        f"该模型会先输出思维链，需要更大的 max_tokens。")
+                budget = min(budget * 2, self.max_token_ceiling)
             except urllib.error.HTTPError as e:
                 last = f"HTTP {e.code}: {e.read()[:200].decode('utf-8', 'replace')}"
             except Exception as e:
@@ -195,6 +197,7 @@ def run_episode(env, instruction: str, agent: ScreenshotAgent, max_steps: int = 
     traj = []
     done = False
     verdict = None
+    error = None
 
     obs = env.get_obs()
     for step in range(1, max_steps + 1):
@@ -202,7 +205,14 @@ def run_episode(env, instruction: str, agent: ScreenshotAgent, max_steps: int = 
             Path(screenshot_dir).mkdir(parents=True, exist_ok=True)
             (Path(screenshot_dir) / f"step{step:02d}.png").write_bytes(obs["screenshot"])
 
-        reply, actions = agent.predict(instruction, obs)
+        try:
+            reply, actions = agent.predict(instruction, obs)
+        except AgentError as e:
+            # 模型这一步挂了，但前面几步是真跑过的，保留它们再退出。
+            error = str(e)
+            if verbose:
+                print(f"  [step {step}] agent 异常，保留前 {len(traj)} 步: {error}")
+            break
         if verbose:
             first = reply.strip().splitlines()[0] if reply.strip() else ""
             print(f"  [step {step}] 模型: {first[:88]}")
@@ -222,4 +232,5 @@ def run_episode(env, instruction: str, agent: ScreenshotAgent, max_steps: int = 
             break
         obs = env.get_obs()
 
-    return {"steps": len(traj), "done": done, "verdict": verdict, "trajectory": traj}
+    return {"steps": len(traj), "done": done, "verdict": verdict,
+            "error": error, "trajectory": traj}

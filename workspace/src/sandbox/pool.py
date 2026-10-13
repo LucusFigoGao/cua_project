@@ -1,17 +1,16 @@
 """
 SandboxPool: 基于 e2b 长运行沙箱的实例池。
 
-不依赖预制镜像——每个实例首次 acquire 时自动部署全部 31 个固定端口 mock app
-（见 deploy.py，实测 170-290s），之后保持 running 状态循环复用（复用耗时 0-1s），
-避免为每个任务重复 git clone + npm install + build。
+31 个 mock app 跑在开发机上（见 apps_host.py），沙箱内不装 app。acquire 拿到新实例时
+只需写一行 /etc/hosts 把 host.docker.internal 指到开发机再探活，秒级完成。
 
-pause/resume 在当前 AGS 部署（模板 sdt-hojglb51）上 resume 会 500，因此
-release 默认 pause=False，acquire 直接 connect 运行中的实例。
+实例常驻复用：release 只把状态标回 idle，不 pause 也不 kill，acquire 直接 connect
+运行中的实例。pause/resume 在模板 sdt-hojglb51 上 resume 必 500，不可用。
 """
 import json
 import os
 import threading
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
@@ -19,13 +18,17 @@ from typing import Optional, Union
 from e2b import Sandbox
 from e2b.sandbox.sandbox_api import SandboxQuery
 
-from . import deploy
-
-POOL_TAG = {"pool": "cua_gym"}
+from src.sandbox import deploy
+from src.settings import (POOL_MAX_SIZE, POOL_TAG, REGISTRY, SANDBOX_TEMPLATE,
+                          SANDBOX_TIMEOUT)
 
 
 class SandboxPoolError(Exception):
     pass
+
+
+class AppsUnreachableError(SandboxPoolError):
+    """开发机上的 mock app 不可达。是开发机侧的问题，不代表沙箱实例坏了。"""
 
 
 @dataclass
@@ -34,10 +37,10 @@ class PoolInstanceConfig:
     template: str
     created_at: str
     status: str = "idle"  # "idle" | "busy"
-    current_task_id: Optional[str] = None
     app_type: Optional[str] = None
-    deployed_apps: dict = field(default_factory=dict)  # app_name -> port
-    apps_ready: bool = False  # 31 个 app 是否已全部部署并可访问
+    #: hosts 映射已配好且开发机上的 app 探活通过。
+    apps_ready: bool = False
+    app_host: Optional[str] = None  # app 实际跑在哪台机器上
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -49,22 +52,20 @@ class PoolInstanceConfig:
 
 
 class SandboxPool:
-    def __init__(self, registry_path: Union[str, Path], template: str = "sdt-hojglb51",
-                 max_size: int = 12, timeout: int = 86400):
+    def __init__(self, registry_path: Union[str, Path] = REGISTRY,
+                 template: str = SANDBOX_TEMPLATE,
+                 max_size: int = POOL_MAX_SIZE, timeout: int = SANDBOX_TIMEOUT,
+                 app_host: Optional[str] = None):
         self._registry_path = Path(registry_path)
         self.template = template
         self.max_size = max_size
         self.timeout = timeout
+        # mock app 跑在哪台机器上。None = 自动探测本机对沙箱可见的 IP。
+        self.app_host = app_host
         self._cond = threading.Condition()
         self._instances: dict[str, PoolInstanceConfig] = {}
         self._pending_handles: dict[str, Sandbox] = {}
         self._load()
-
-    # ---------- 工厂方法 ----------
-
-    @classmethod
-    def from_registry(cls, path: Union[str, Path], **kwargs) -> "SandboxPool":
-        return cls(path, **kwargs)
 
     # ---------- registry 落盘 ----------
 
@@ -122,11 +123,12 @@ class SandboxPool:
                 timeout: Optional[float] = None, max_retries: int = 2,
                 ensure_apps: bool = True) -> tuple[PoolInstanceConfig, Sandbox]:
         """
-        取一个可用实例。默认保证返回的沙箱已经部署好全部 31 个 app
-        （首次拿到新实例时会触发一次 ~176s 的部署，之后复用不再重跑）。
+        取一个可用实例，并保证它能访问到开发机上的 31 个 app（写 hosts + 探活，秒级）。
 
-        任何一个 app 起不来都视为坏实例：kill 掉并重新创建，不会把半残的实例交出去。
-        ensure_apps=False 可跳过部署，仅用于只需要裸沙箱的场景（如烟雾测试）。
+        app 不可达说明开发机那边没起服务或网络不通，不是实例的问题，所以不 kill 实例，
+        直接抛 AppsUnreachableError 让调用方去跑 serve_apps.py。
+
+        ensure_apps=False 跳过这一步，用于只需要裸沙箱的场景（如烟雾测试）。
         """
         last_err = None
         for _ in range(max_retries + 1):
@@ -147,11 +149,11 @@ class SandboxPool:
                 return cfg, sbx
 
             try:
-                if not self._ensure_apps_ready(cfg, sbx):
-                    last_err = SandboxPoolError(
-                        f"实例 {cfg.sandbox_id} 部分 app 未就绪，已销毁重建")
-                    self._drop_dead_locked(cfg.sandbox_id)
-                    continue
+                self._ensure_apps_ready(cfg, sbx)
+            except AppsUnreachableError:
+                # 实例本身没问题，归还而不是 kill，把问题抛给调用方
+                self.release(cfg.sandbox_id)
+                raise
             except Exception as e:
                 last_err = e
                 self._drop_dead_locked(cfg.sandbox_id)
@@ -160,28 +162,34 @@ class SandboxPool:
             return cfg, sbx
         raise SandboxPoolError(f"acquire 连续失败 {max_retries + 1} 次，放弃: {last_err}")
 
-    def _ensure_apps_ready(self, cfg: PoolInstanceConfig, sbx: Sandbox) -> bool:
-        """保证实例上 31 个 app 全部就绪。已就绪的实例直接返回 True，不重复部署。"""
-        if cfg.apps_ready:
-            return True
+    def _ensure_apps_ready(self, cfg: PoolInstanceConfig, sbx: Sandbox) -> None:
+        """
+        保证实例能访问开发机上的 31 个 app：写一行 /etc/hosts 再探活，秒级。
 
-        status = deploy.deploy_all_apps(sbx)
-        ready = bool(status) and all(status.values())
+        每次 acquire 都重写 hosts 而不是靠 cfg.apps_ready 跳过：开发机 IP 可能变了，
+        或实例是从远端 reconcile 回来的（registry 里没有它的 app_host）。写入幂等，
+        成本可忽略。
+        """
+        result = deploy.ensure_apps_reachable(sbx, host_ip=self.app_host)
+        ready = result["ready"]
 
         with self._cond:
             current = self._instances.get(cfg.sandbox_id)
-            if current is not None:
-                current.apps_ready = ready
-                if ready:
-                    current.deployed_apps = dict(deploy.load_app_ports())
-                self._save()
-        cfg.apps_ready = ready
-        if ready:
-            cfg.deployed_apps = dict(deploy.load_app_ports())
-        return ready
+            for target in (current, cfg):
+                if target is None:
+                    continue
+                target.apps_ready = ready
+                target.app_host = result["host_ip"]
+            self._save()
+
+        if not ready:
+            raise AppsUnreachableError(
+                f"开发机 {result['host_ip']} 上有 {len(result['down'])} 个 app 不可达"
+                f"（{', '.join(result['down'][:5])}{'...' if len(result['down']) > 5 else ''}）。"
+                f"请先在开发机执行: python -m workspace.src.serve_apps --start")
 
     def _drop_dead_locked(self, sandbox_id: str) -> None:
-        """connect 失败或 app 部署不全时的清理：kill 掉坏实例并从 registry 移除，好让下一轮重新创建。"""
+        """connect 失败等实例级故障的清理：kill 掉坏实例并从 registry 移除，好让下一轮重新创建。"""
         try:
             Sandbox.kill(sandbox_id)
         except Exception:
@@ -235,28 +243,29 @@ class SandboxPool:
         self._save()
         return cfg
 
-    def release(self, sandbox_id: str, sbx: Optional[Sandbox] = None, pause: bool = False) -> None:
-        if pause:
-            live = sbx or Sandbox.connect(sandbox_id, timeout=self.timeout)
-            live.pause()
-
+    def release(self, sandbox_id: str) -> None:
+        """标记为 idle。实例保持 running 等待复用，不 pause 也不 kill。"""
         with self._cond:
             cfg = self._instances.get(sandbox_id)
             if cfg is None:
                 return
             cfg.status = "idle"
-            cfg.current_task_id = None
             self._save()
             self._cond.notify_all()
 
-    def mark_app_deployed(self, sandbox_id: str, app_type: str, port: int) -> None:
+    # ---------- 查询 ----------
+
+    def instances(self) -> dict[str, PoolInstanceConfig]:
         with self._cond:
-            cfg = self._instances.get(sandbox_id)
-            if cfg is None:
-                return
-            cfg.app_type = app_type
-            cfg.deployed_apps[app_type] = port
-            self._save()
+            return dict(self._instances)
+
+    def get(self, sandbox_id: str) -> Optional[PoolInstanceConfig]:
+        with self._cond:
+            return self._instances.get(sandbox_id)
+
+    def idle_ids(self) -> list[str]:
+        with self._cond:
+            return [sid for sid, c in self._instances.items() if c.status == "idle"]
 
     # ---------- 销毁 ----------
 

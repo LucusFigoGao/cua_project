@@ -4,23 +4,21 @@
 
 做三件事：
   1. 筛选  —— 只留 app_type 落在 configs/apps.json 那 31 个 mock app 里的任务。
-              实测这个条件与 tasks.parquet 的 platform=="web" and setup_kind=="py"
-              完全等价（都是 1067 条），而 app_type 就在任务自己的 task.json 里，
-              所以这里不读 parquet。
-  2. 替换  —— 归档里的 .py 存的是未替换的 __CUA_GYM_<APP>_URL__ 占位符，
-              换成沙箱内的 http://host.docker.internal:<port>（见 tasks/urlmap.py）。
+              app_type 就在任务自己的 task.json 里，不需要读 tasks.parquet。
+  2. 替换  —— 归档里的 .py 存的是 __CUA_GYM_<APP>_URL__ 占位符，
+              换成 http://host.docker.internal:<port>（见 tasks/urlmap.py）。
   3. 落盘  —— tasks_data/<task_id>/{task.json, initial_setup.py, reward.py}
               + tasks_data/_index.json 供 tasks/catalog.py 快速读取。
 
-跑完之后 tasks_data/ 就是一份自描述的任务库，后续 push_tasks.py 只读它，不再碰归档。
+产物 tasks_data/ 是一份自描述的任务库，push_tasks.py 只读它。
 
-归档遍历有两个坑：zstd 流不可 seek，tar 必须 mode="r|" 单向顺序读完（全量 ~5s）；
-归档里混了 macOS 的 ._xxx AppleDouble 伪文件，内容不是 UTF-8，必须按文件名跳过。
+归档遍历有两个约束：zstd 流不可 seek，tar 必须 mode="r|" 单向顺序读完（全量 ~5s）；
+归档里混了 macOS 的 ._xxx AppleDouble 伪文件，内容不是 UTF-8，按文件名跳过。
 
 Usage:
-    python workspace/unpack_tasks.py              # 解全部符合条件的任务
-    python workspace/unpack_tasks.py --force       # 已存在的也重新解
-    python workspace/unpack_tasks.py --limit 50    # 只解前 50 个（调试用）
+    python -m src.cli.unpack_tasks              # 解全部符合条件的任务
+    python -m src.cli.unpack_tasks --force       # 已存在的也重新解
+    python -m src.cli.unpack_tasks --limit 50    # 只解前 50 个（调试用）
 """
 import argparse
 import json
@@ -32,14 +30,11 @@ import tarfile
 import time
 from pathlib import Path
 
-WORKSPACE = Path(__file__).parent
-PROJECT_ROOT = WORKSPACE.parent
-sys.path.insert(0, str(WORKSPACE))
-
-from tasks.urlmap import HOST_ALIAS, apply_replacements, build_replacements, load_app_ports
+from src.settings import HOST_ALIAS, PROJECT_ROOT, TASKS_DATA, app_ports
+from src.tasks.urlmap import apply_replacements, build_replacements
 
 ARCHIVE = PROJECT_ROOT / "gym" / "bench" / "artifacts" / "cua_gym_tasks_v1.tar.zst"
-DATA_DIR = WORKSPACE / "tasks_data"
+DATA_DIR = TASKS_DATA
 
 WANTED_FILES = {"task.json", "initial_setup.py", "reward.py"}
 
@@ -80,7 +75,7 @@ def main() -> int:
         print(f"[FAIL] 找不到归档: {args.archive}")
         return 1
 
-    ports = load_app_ports()
+    ports = app_ports()
     repl = build_replacements(ports)
     print("=== 解包 CUA-Gym web 任务 ===")
     print(f"归档   : {args.archive.relative_to(PROJECT_ROOT)} "
@@ -177,7 +172,7 @@ def main() -> int:
         print(f"\n无 web 任务的 app（已部署但用不上）: {', '.join(missing)}")
 
     print(f"\n索引: {args.out / '_index.json'}")
-    print("下一步: python workspace/push_tasks.py --per-app 3")
+    print("下一步: python -m src.cli.push_tasks --per-app 3")
     # 被剔除的任务是上游归档的既有瑕疵，不是解包失败，不作为非零退出条件
     return 0
 

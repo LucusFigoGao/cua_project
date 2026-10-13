@@ -5,19 +5,15 @@
 时序照 osworld/lib_run_single.py 的 run_single_example：
     reset(task) → [ agent.predict(obs) → env.step(action) ] * max_steps → evaluate()
 
-组件来源：
-    实例与 31 个 app   sandbox/pool.py + deploy.py          (M0)
-    任务文件           tasks/ + 顶层 unpack_tasks/push_tasks (M2)
-    观测与动作         sandbox/osworld_server.py + pixel_env.py (M1)
-    agent              agents/bridge.py，复用 mm_agents 的提示词与解析
+任务脚本必须在沙箱内执行：initial_setup.py 把 sid 写到 /tmp/task_web_sid、
+reward.py 从那里读，两者必须同机；launch_gui 也要在沙箱的 chromium 里开页面。
+它们访问的 app 跑在开发机上。
 
-环境变量：ICHAT_API_KEY / ICHAT_BASE_URL 定义在 ~/.bashrc 里，非交互 shell 不会
-自动加载。用 `bash -lc 'python workspace/run_task.py ...'` 或先 source 一下。
+ICHAT_API_KEY / ICHAT_BASE_URL 定义在 ~/.bashrc，非交互 shell 不会自动加载。
 
 Usage:
-    bash -lc 'source ~/.bashrc && python workspace/run_task.py'
-    bash -lc 'source ~/.bashrc && python workspace/run_task.py --task <task_id> --model gpt-4o --max-steps 15'
-    bash -lc 'source ~/.bashrc && python workspace/run_task.py --list'
+    bash -lc 'source ~/.bashrc && python -m src.cli.run_task --list'
+    bash -lc 'source ~/.bashrc && python -m src.cli.run_task --task <id> --max-steps 15'
 """
 import argparse
 import json
@@ -25,27 +21,16 @@ import os
 import re
 import sys
 import time
-from pathlib import Path
-
-WORKSPACE = Path(__file__).parent
-sys.path.insert(0, str(WORKSPACE))
 
 os.environ.setdefault("NO_PROXY", "*.tencentags.com,*.woa.com,*.tencentyun.com")
 
-from agents.bridge import ScreenshotAgent, run_episode
-from sandbox import osworld_server as osw
-from sandbox.pixel_env import PixelSandboxEnv
-from sandbox.pool import SandboxPool
-from tasks import catalog, push
-
-TEMPLATE = "sdt-hojglb51"
-TIMEOUT = 86400
-REGISTRY = WORKSPACE / "configs" / "sandbox_pool.json"
-RESULTS = WORKSPACE / "results"
-
-# qwen3.x 会先吐思维链（reasoning_content）再给 content，max_tokens 给小了 content
-# 会是空的。实测 1500 对 qwen3.8-max 偏紧，这里默认给够。
-DEFAULT_MAX_TOKENS = 3000
+from src.agents.bridge import ScreenshotAgent, run_episode
+from src.sandbox import apps_host
+from src.sandbox import osworld_server as osw
+from src.sandbox.pixel_env import PixelSandboxEnv
+from src.sandbox.pool import AppsUnreachableError, SandboxPool
+from src.settings import DEFAULT_MAX_TOKENS, RESULTS
+from src.tasks import catalog, push
 
 
 def main() -> int:
@@ -63,10 +48,25 @@ def main() -> int:
         print(f"[FAIL] {catalog.DATA_DIR} 为空，先跑 unpack_tasks.py")
         return 1
 
-    pool = SandboxPool(REGISTRY, template=TEMPLATE, max_size=12, timeout=TIMEOUT)
+    # app 在开发机上，先确认它们在跑——否则任务脚本注入状态必然失败
+    host_ip = apps_host.detect_host_ip()
+    ports = apps_host.check_ports()
+    if not all(ports.values()):
+        down = [a for a, ok in ports.items() if not ok]
+        print(f"[FAIL] 开发机 {host_ip} 上有 {len(down)} 个 app 没在跑: "
+              f"{', '.join(down[:5])}{'...' if len(down) > 5 else ''}")
+        print("       先执行: python -m src.cli.serve_apps --start")
+        return 1
+
+    pool = SandboxPool(app_host=host_ip)
     pool.reconcile()
-    cfg, sbx = pool.acquire()
-    print(f"sandbox : {cfg.sandbox_id}  apps_ready={cfg.apps_ready}")
+    try:
+        cfg, sbx = pool.acquire()
+    except AppsUnreachableError as e:
+        print(f"[FAIL] {e}")
+        return 1
+    print(f"sandbox : {cfg.sandbox_id}  apps_ready={cfg.apps_ready}  "
+          f"app_host={cfg.app_host}")
 
     try:
         remote = push.list_remote_tasks(sbx)
@@ -137,6 +137,8 @@ def main() -> int:
         elapsed = time.time() - t0
         print(f"        跑了 {ep['steps']} 步，{elapsed:.0f}s，"
               f"verdict={ep.get('verdict')}")
+        if ep.get("error"):
+            print(f"        [提前结束] {ep['error'][:200]}")
 
         # ── 4. 评分 ─────────────────────────────────────────────────────────
         print("[ 4/4 ] 跑 reward.py 评分 ...")
@@ -169,7 +171,7 @@ def main() -> int:
         return 0
 
     finally:
-        pool.release(cfg.sandbox_id, sbx=sbx, pause=False)
+        pool.release(cfg.sandbox_id)
         print(f"\n已 release，实例保持 running（未 kill）")
 
 

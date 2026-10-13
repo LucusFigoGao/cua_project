@@ -1,36 +1,27 @@
 """
 PixelSandboxEnv：OSWorld agent server 的瘦客户端。
 
-形状照搬 gym/utils/env.py 的 Env（cua-gym 在阿里云 ECS 上就是这么用的，方法名
-screenshot / execute / execute_python_command / get_screen_size 与 server 路由一一
-对应），只换了传输层：
+形状照搬 gym/utils/env.py 的 Env——方法名 screenshot / execute /
+execute_python_command / get_screen_size 与 server 路由一一对应，只换了传输层：
 
     cua-gym (阿里云)：  编排进程 --HTTP--> ECS VM 私网 IP:5000
     这里   (AGS 沙箱)： 编排进程 --envd--> 沙箱内 curl 127.0.0.1:5000
 
-为什么不直连：模板 sdt-hojglb51 **没有对外暴露任何沙箱端口**（实测 5000/9222/8000/
-8018/5900/6080 全部返回 310508 "sandbox endpoint is not configured"，只有 envd 自己
-的端口可达；Sandbox.create(network=SandboxNetworkOpts(allow_public_traffic=True,
-https_ports=[...])) 也改不了，端口暴露是模板级固定的）。所以所有请求都要经 envd 的
+不直连的原因：模板 sdt-hojglb51 没有对外暴露任何沙箱端口（5000/9222/8000/5900 等
+一律返回 310508 "sandbox endpoint is not configured"，端口暴露是模板级固定的，
+SandboxNetworkOpts 改不了），只有 envd 自己的端口可达。所以所有请求都经 envd 的
 commands.run 用 curl 发到 localhost。
 
-实测延迟（活跃实例）：
-    动作（move/click 等）  约 540ms
-      = envd 往返 35ms + 起 python3 子进程 60ms + import pyautogui 416ms
-    screenshot            约 240ms（1920x1080 PNG 约 550KB）
+单步动作约 540ms = envd 往返 35ms + 起 python3 子进程 60ms + import pyautogui 416ms；
+screenshot 约 240ms（1920x1080 PNG 约 550KB）。那 416ms 是 OSWorld 协议固有的——
+/execute 走 subprocess，每个动作都重新 import 一次 pyautogui。相对 agent 一次推理
+（秒级）可忽略。要压它得给 server 加一个在 Flask 进程内 exec 的常驻路由。
 
-那 416ms 是 OSWorld 这套协议固有的：/execute 和 /run_python 都用 subprocess 执行，
-每个动作都要重新 import 一次 pyautogui，上游在真机上也是这个代价。相对 agent 一次
-推理（秒级）可以忽略，而且 OSWorld 默认每步后还会 sleep 若干秒。如果将来要压这个
-开销，正确做法是给 server 加一个常驻 exec 路由（在 Flask 进程内 exec，pyautogui 已
-import），但那是改 OSWorld server 的事，当前不做。
+坐标系是**全屏 1920x1080**，不是浏览器 viewport：osworld/mm_agents 下 50+ 个 agent
+全部按"全屏截图 + pyautogui 代码"prompt，给 viewport 截图会让模型坐标系统性偏移。
 
-坐标系：**全屏 1920x1080**，不是浏览器 viewport。这是刻意的——osworld/mm_agents 下
-50+ 个 agent 全部按"全屏截图 + pyautogui 代码"来 prompt，给浏览器 viewport 截图会
-让模型的坐标判断系统性偏移。
-
-a11y 树不可用：沙箱内 pyatspi 无法 import（见 osworld_server.py 顶部说明），所以
-get_accessibility_tree() 会抛错，observation_type 只用 "screenshot"。
+a11y 树不可用（见 osworld_server.py 顶部），get_accessibility_tree() 直接抛错，
+observation_type 只用 "screenshot"。
 """
 import json
 import shlex
@@ -39,14 +30,12 @@ from typing import Any, Optional, Union
 
 from e2b import Sandbox
 
-from . import osworld_server
+from src.sandbox import osworld_server
 
-SCREEN_SIZE = (1920, 1080)
-
-# 照抄 osworld/desktop_env/controllers/python.py 的 PYAUTOGUI_PKGS_PREFIX。
-# 它做三件事：import pyautogui、关掉 FAILSAFE（否则鼠标移到角落会抛异常中断任务）、
-# 以及修 pyautogui 对 shift 字符的判断（Linux 下 '<' 不需要 shift，上游 pyautogui
-# 判错会导致 typewrite 打出错字）。这段不能省——agent 的 typewrite 输出依赖它。
+# 照抄 osworld/desktop_env/controllers/python.py 的 PYAUTOGUI_PKGS_PREFIX：import
+# pyautogui、关掉 FAILSAFE（否则鼠标移到角落会抛异常中断任务）、修 pyautogui 对
+# shift 字符的判断（Linux 下 '<' 不需要 shift，判错会让 typewrite 打出错字）。
+# 这段不能省——agent 的 typewrite 输出依赖它。
 PYAUTOGUI_PKGS_PREFIX = (
     "import pyautogui; import time; import platform; "
     "pyautogui.FAILSAFE = False; "
@@ -90,8 +79,7 @@ class PixelSandboxEnv:
         return (r.stdout or "").strip()
 
     def _get_json(self, route: str, timeout: int = 60) -> Any:
-        out = self._curl(f"{self.base}{route}", timeout=timeout)
-        return self._parse_json(route, out)
+        return self._parse_json(self._curl(f"{self.base}{route}", timeout=timeout))
 
     def _post_json(self, route: str, payload: dict, timeout: int = 120) -> Any:
         body = json.dumps(payload, ensure_ascii=False)
@@ -99,15 +87,10 @@ class PixelSandboxEnv:
             f"-X POST -H 'Content-Type: application/json' "
             f"--data-binary {shlex.quote(body)} {self.base}{route}",
             timeout=timeout)
-        return self._parse_json(route, out)
-
-    def _post_form(self, route: str, fields: dict, timeout: int = 120) -> Any:
-        parts = " ".join(f"--data-urlencode {shlex.quote(f'{k}={v}')}" for k, v in fields.items())
-        out = self._curl(f"-X POST {parts} {self.base}{route}", timeout=timeout)
-        return self._parse_json(route, out)
+        return self._parse_json(out)
 
     @staticmethod
-    def _parse_json(route: str, out: str) -> Any:
+    def _parse_json(out: str) -> Any:
         if not out:
             return None
         try:
@@ -168,22 +151,17 @@ class PixelSandboxEnv:
         这是 mm_agents 的 action_space="pyautogui" 的直接落点：模型吐出的
         `pyautogui.click(x=500, y=300)` 原样传进来即可，不需要翻译。
 
-        实现照 osworld 的 PythonController.execute_python_command：/execute 路由其实是
-        跑 **子进程**（subprocess.run），不是 exec 一段 python，所以必须把代码包成
-        ["python3", "-c", PREFIX.format(command=...)] 这样的 argv 列表传过去，并且
-        shell=False。之前直接传代码字符串会被 server 端 shlex.split 切碎然后卡住。
-
-        argv 用列表传、不经 shell，所以代码里的引号/分号都不需要再转义。
+        实现照 osworld 的 PythonController.execute_python_command。/execute 路由跑的是
+        **子进程**（subprocess.run）而不是 exec 一段 python，所以必须把代码包成
+        ["python3", "-c", PREFIX.format(command=...)] 的 argv 列表、shell=False 传过去；
+        传裸代码字符串会被 server 端 shlex.split 切碎。argv 不经 shell，代码里的
+        引号/分号都不需要转义。
         """
         payload = {
             "command": ["python3", "-c", PYAUTOGUI_PKGS_PREFIX.format(command=command)],
             "shell": False,
         }
         return self._post_json("/execute", payload, timeout=timeout) or {}
-
-    def run_python_script(self, script: str, timeout: int = 180) -> dict:
-        """跑一整段 python 脚本（server 的 /run_python，内部 exec）。"""
-        return self._post_json("/run_python", {"code": script}, timeout=timeout) or {}
 
     def execute(self, command: str, timeout: int = 120) -> dict:
         """执行 shell 命令。对应 server 的 /setup/execute（shell=True）。"""

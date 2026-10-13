@@ -1,11 +1,10 @@
 """
 任务目录读取与取样。
 
-数据源是 workspace/tasks_data/（由 unpack_tasks.py 生成），**不读 gym/bench/data/tasks.parquet**：
-实测 `app_type ∈ configs/apps.json 的 31 个 app` 与 parquet 里
-`platform=="web" and setup_kind=="py"` 完全等价（都是 1067 条），而 app_type 就写在每个
-任务自己的 task.json 里，所以筛选不需要外部索引文件。任务目录自描述的好处是新增任务
-只要目录结构对就能被认出来，不必同步维护 parquet。
+数据源是 workspace/tasks_data/（由 cli/unpack_tasks.py 生成），不读
+gym/bench/data/tasks.parquet：`app_type ∈ configs/apps.json 的 31 个 app` 与 parquet 里
+`platform=="web" and setup_kind=="py"` 等价（都是 1067 条），而 app_type 就写在每个任务
+自己的 task.json 里。任务目录自描述，新增任务不必同步维护索引。
 """
 import json
 import random
@@ -13,9 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
 
-from .urlmap import load_app_ports
+from src.settings import TASKS_DATA, app_ports
 
-DATA_DIR = Path(__file__).parent.parent / "tasks_data"
+DATA_DIR = TASKS_DATA
 INDEX_NAME = "_index.json"
 REQUIRED_FILES = ("task.json", "initial_setup.py", "reward.py")
 
@@ -29,29 +28,19 @@ class TaskSpec:
     difficulty: Optional[str] = None
     path: Optional[Path] = None
 
-    def to_dict(self) -> dict:
-        d = {
-            "task_id": self.task_id,
-            "app_type": self.app_type,
-            "port": self.port,
-            "instruction": self.instruction,
-            "difficulty": self.difficulty,
-        }
-        return d
-
 
 def load_tasks(data_dir: Union[str, Path, None] = None) -> list[TaskSpec]:
     """
     读出 tasks_data/ 里的全部任务。
 
-    优先走 _index.json（快）；索引缺失或与目录不一致时回退到逐目录读 task.json（自愈），
+    优先走 _index.json（快）；索引缺失或与目录不一致时回退到逐目录读 task.json，
     这样手工往 tasks_data/ 里丢一个任务目录也能被认出来。
     """
     root = Path(data_dir or DATA_DIR)
     if not root.exists():
         return []
 
-    ports = load_app_ports()
+    ports = app_ports()
     index_path = root / INDEX_NAME
     specs: list[TaskSpec] = []
     seen: set[str] = set()

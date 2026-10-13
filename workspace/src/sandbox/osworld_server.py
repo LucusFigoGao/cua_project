@@ -1,64 +1,39 @@
 """
 把 OSWorld 的 agent server（osworld/desktop_env/server/main.py）装进 AGS 沙箱并常驻跑起来。
 
-为什么用 OSWorld 的 server 而不是自己写环境层：
-  - cua-gym 在阿里云 ECS 上就是这么做的。gym/utils/env.py 开头写明
-    "cpfs02 server → Aliyun ECS VM (private IP:5000)"，那个 5000 端口就是这个
-    Flask server；Env.screenshot()/execute()/get_accessibility_tree() 逐一对应
-    server 的 /screenshot、/setup/execute、/accessibility 路由。即 cua-gym 的
-    Env 本身就是这个 server 的瘦客户端，我们只是把底层从 ECS 换成 AGS 沙箱。
-  - osworld/mm_agents 下 50+ 个 agent 全部按"全屏截图 + pyautogui 代码"来 prompt，
-    用这个 server 就不需要自己写动作/观测的翻译层。
+用 OSWorld 的 server 而不是自写环境层，因为 cua-gym 的 Env 本身就是它的瘦客户端：
+Env.screenshot()/execute()/get_accessibility_tree() 逐一对应 server 的 /screenshot、
+/setup/execute、/accessibility 路由。这里只是把底层从 ECS 换成 AGS 沙箱。另外
+osworld/mm_agents 下 50+ 个 agent 全部按"全屏截图 + pyautogui 代码"来 prompt，用这个
+server 就不必自写动作/观测的翻译层。
 
-与 OSWorld 原始部署的三处差异（都是 AGS 沙箱的客观约束）：
-  1. 不用 systemd。osworld_server.service 在沙箱里跑不起来，改成 setsid+nohup 托管。
-  2. DISPLAY 是 :1 不是 :0。沙箱里 Xvfb 跑在 :1（`Xvfb :1 -screen 0 1920x1080x24`），
-     service 文件里写的 :0 在这里是空的。
-  3. 必须以默认用户 user 跑，不能 root。root 跑 chromium 会被拒
-     （"Running as root without --no-sandbox is not supported"），X 相关也会出问题。
-     只有装系统包那一步用 root。
+部署上有三处 AGS 沙箱的客观约束：
+  1. 不用 systemd（沙箱里跑不起来），用 setsid+nohup 托管。
+  2. DISPLAY 用 :1——沙箱的 Xvfb 跑在 :1（`Xvfb :1 -screen 0 1920x1080x24`）。
+  3. 必须以默认用户 user 跑。root 跑 chromium 会被拒（"Running as root without
+     --no-sandbox is not supported"），只有装系统包那一步用 root。
 
-已实测确认（活跃实例 qgzb2gix...）：
-  pyautogui.size()      -> 1920x1080
-  pyautogui.screenshot() -> 装 gnome-screenshot 后正常
-  点击+滚动             -> 真的改变了桌面画面（截图前后像素不同）
-  chromium 窗口          -> 已映射到 Xvfb :1，非黑像素占 98.55%
-
-已知不可用：/accessibility（a11y 树）。python3-pyatspi 装得上，但它依赖的 _gi 是
-为 Python 3.13 编译的 C 扩展，而沙箱 python3 是 3.12，import 直接失败。要修得重做
-模板，不在本层解决。因此 observation_type 只用 screenshot，不用 a11y_tree 系列。
+已知不可用：/accessibility（a11y 树）。python3-pyatspi 装得上，但它依赖的 _gi 是为
+Python 3.13 编译的 C 扩展，而沙箱 python3 是 3.12，import 直接失败。要修得重做模板。
+因此 observation_type 只用 screenshot，不用 a11y_tree 系列。
 """
 import time
-from pathlib import Path
-from typing import Optional
 
 from e2b import Sandbox
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-SERVER_SRC = PROJECT_ROOT / "osworld" / "desktop_env" / "server" / "main.py"
-PYXCURSOR_SRC = PROJECT_ROOT / "osworld" / "desktop_env" / "server" / "pyxcursor.py"
+from src.settings import (DISPLAY, OSWORLD_SERVER_DIR as REMOTE_DIR, PYXCURSOR_SRC,
+                          SERVER_LOG, SERVER_PORT, SERVER_SRC)
 
-REMOTE_DIR = "/opt/osworld_server"
-SERVER_PORT = 5000
-SERVER_LOG = "/tmp/osworld_server.log"
-DISPLAY = ":1"
-
-# server 实际需要的 pip 包。原始 requirements.txt 里还有 pynput / pygame / pywinauto：
-# pywinauto 是 Windows 专用（main.py 按 platform 分支 import，Linux 下不会走到），
-# pynput 装起来要编译且这里用不到，pygame 只被录屏用到。保持最小集。
+# server 真正需要的最小集。requirements.txt 里的 pywinauto 是 Windows 专用，
+# pynput 要编译、pygame 只被录屏用到，都不装。
 PIP_PACKAGES = "flask pyautogui python-xlib pillow lxml numpy requests"
 # pyautogui 在 Linux 上截图要调 gnome-screenshot；xdotool 给窗口操作兜底
 APT_PACKAGES = "gnome-screenshot xdotool"
 
 
-# main.py 在 Linux 分支里是模块级 `import pyatspi`，装不上就整个 server 起不来。
-# 沙箱里 pyatspi 不可用（python3-pyatspi 装得上，但它依赖的 _gi 是为 Python 3.13
-# 编译的 C 扩展，沙箱 python3 是 3.12，import 直接失败）。
-# pyatspi 只被 /accessibility 和 /terminal 两个路由用到，我们只需要 /screenshot 和
-# /execute，所以把这组 import 包成 try/except：失败时把相关符号置空，server 正常起，
-# 只有那两个路由在被调用时才报错。
-#
-# 这是对上传副本做的最小改动，osworld/ 目录下的原文件不动（README 承诺不改 osworld/）。
+# main.py 的 Linux 分支是模块级 `import pyatspi`，在沙箱里必定失败（见模块 docstring），
+# 整个 server 都起不来。pyatspi 只被 /accessibility 和 /terminal 用到，所以包成
+# try/except：失败时把符号置空，server 正常起，只有那两个路由调用时才报错。
 _ATSPI_SHIM = '''
 if platform_name == "Linux":
     try:
@@ -68,7 +43,7 @@ if platform_name == "Linux":
         from pyatspi import Component
         from pyatspi import Text as ATText
         from pyatspi import Value as ATValue
-    except Exception as _atspi_err:  # 沙箱内 pyatspi 不可用，见 workspace/sandbox/osworld_server.py
+    except Exception:  # 沙箱内 pyatspi 不可用，见 src/sandbox/osworld_server.py
         pyatspi = None
         Accessible = Any
         StateType = Any
@@ -95,13 +70,10 @@ _ATSPI_ORIG = '''if platform_name == "Linux":
 
 def _patch_server_source(src: str) -> str:
     """
-    对上传副本做两处最小改动（osworld/ 目录下的原文件不动）：
-      1. pyatspi 的模块级 import 改成可失败（见上）
-      2. 关掉 Flask 的 debug/reloader
-
-    第 2 点的原因：原文件结尾是 `app.run(debug=True, host="0.0.0.0")`，debug 模式会
-    拉起 reloader 子进程（日志里的 "Restarting with stat"），变成两个进程监听同一
-    端口，pkill 时容易只杀掉一个留下孤儿。常驻服务不需要热重载。
+    对上传副本做两处最小改动（osworld/ 下的原文件不动）：
+      1. pyatspi 的模块级 import 包成 try/except（见上）
+      2. 关掉 Flask 的 debug/reloader——debug 会拉起 reloader 子进程，两个进程监听同
+         一端口，pkill 容易留孤儿。常驻服务不需要热重载。
     """
     if _ATSPI_ORIG in src:
         src = src.replace(_ATSPI_ORIG, _ATSPI_SHIM.lstrip("\n"), 1)

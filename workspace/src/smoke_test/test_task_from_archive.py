@@ -1,43 +1,28 @@
 #!/usr/bin/env python3
 """
-端到端验证：从归档解包出来的任务（占位符已替换）能否在实例上真正跑通。
-
-与旧的 test_task_e2e.py 的区别：
-  - 任务来自 workspace/tasks_data/（unpack_tasks.py 从 gym/bench 的归档解出），
-    不再读 /data/workspace/tasks_web
-  - **不 kill 实例**，结束 release(pause=False) 让它回到 idle 继续复用
-  - 额外验证 launch_gui 经 google-chrome shim 真的在常驻 chromium 里开了页面
-    （查 CDP 9222 的 target 列表里有没有对应的 ?sid=）
+端到端验证：tasks_data/ 里的任务（占位符已替换）能否在实例上真正跑通。
 
 验证链路：
-  1. pool.acquire        —— 复用已部署好 31 个 app 的实例
+  1. pool.acquire        —— 取一个接好开发机 app 的实例
   2. 挑一个已推送的任务   —— 默认从 /tmp/cua_tasks 的清单里取
   3. initial_setup.py    —— 应写出 /tmp/task_web_sid
-  4. CDP target 检查      —— 页面 URL 带该 sid，证明 shim + launch_gui 生效
+  4. CDP target 检查      —— 页面 URL 带该 sid，证明 google-chrome shim + launch_gui 生效
   5. reward.py           —— 应解析出 REWARD（初始状态预期 0.0）
   6. pool.release        —— 实例保持 running
 
 Usage:
-    python workspace/smoke_test/test_task_from_archive.py [task_id]
+    python -m src.smoke_test.test_task_from_archive [task_id]
 """
-import json
 import os
 import re
 import sys
 import time
-from pathlib import Path
-
-WORKSPACE = Path(__file__).parent.parent
-sys.path.insert(0, str(WORKSPACE))
 
 os.environ.setdefault("NO_PROXY", "*.tencentags.com,*.woa.com,*.tencentyun.com")
 
-from sandbox.pool import SandboxPool
-from tasks import catalog, push
+from src.sandbox.pool import SandboxPool
+from src.tasks import catalog, push
 
-TEMPLATE = "sdt-hojglb51"
-TIMEOUT = 86400
-REGISTRY = WORKSPACE / "configs" / "sandbox_pool.json"
 REMOTE_ROOT = push.REMOTE_ROOT
 
 _passed: list[str] = []
@@ -71,7 +56,7 @@ def main() -> int:
     print("=== 归档任务端到端验证 ===")
     print(f"本地任务库 : {catalog.DATA_DIR}（{len(local)} 个任务）")
 
-    pool = SandboxPool(REGISTRY, template=TEMPLATE, max_size=12, timeout=TIMEOUT)
+    pool = SandboxPool()
     pool.reconcile()
 
     _section("1. pool.acquire（复用已部署实例）")
@@ -210,8 +195,8 @@ def main() -> int:
 
     finally:
         _section("release（不 kill）")
-        pool.release(cfg.sandbox_id, sbx=sbx, pause=False)
-        final = pool._instances.get(cfg.sandbox_id)
+        pool.release(cfg.sandbox_id)
+        final = pool.get(cfg.sandbox_id)
         print(f"  {cfg.sandbox_id}  status={final.status if final else '?'}  实例保持 running")
 
 
