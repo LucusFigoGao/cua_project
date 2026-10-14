@@ -37,6 +37,24 @@ SCREEN_W, SCREEN_H = 1920, 1080
 DEFAULT_MODEL = "qwen3.8-max"
 DEFAULT_MAX_TOKENS = 16384
 
+# ichat 的三条 SDK 兼容通道（见 support/ichat.md）。三者同根，只差最后一段路径，
+# 所以从 ICHAT_BASE_URL 推导出根再拼；各自也可以用独立环境变量覆盖。
+_ICHAT_OPENAI = os.environ.get("ICHAT_BASE_URL", "http://ichat.woa.com/api/external")
+_ICHAT_ROOT = _ICHAT_OPENAI.rstrip("/")
+if _ICHAT_ROOT.endswith("/external"):
+    _ICHAT_ROOT = _ICHAT_ROOT[: -len("/external")]
+
+ICHAT_CHANNELS = {
+    "openai": _ICHAT_OPENAI.rstrip("/"),
+    "anthropic": os.environ.get("ICHAT_ANTHROPIC_BASE_URL", f"{_ICHAT_ROOT}/claude"),
+    "google_genai": os.environ.get("ICHAT_GENAI_BASE_URL", f"{_ICHAT_ROOT}/google-genai"),
+}
+
+
+def ichat_key() -> str:
+    """ICHAT_API_KEY。定义在 ~/.bashrc，非交互 shell 不会自动加载。"""
+    return os.environ.get("ICHAT_API_KEY", "")
+
 # AGS 域名不走代理
 os.environ.setdefault("NO_PROXY", "*.tencentags.com,*.woa.com,*.tencentyun.com")
 

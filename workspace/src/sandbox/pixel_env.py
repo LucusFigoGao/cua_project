@@ -26,7 +26,7 @@ observation_type 只用 "screenshot"。
 import json
 import shlex
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional, Sequence, Union
 
 from e2b import Sandbox
 
@@ -117,14 +117,25 @@ class PixelSandboxEnv:
             Path(local_out).write_bytes(data)
         return data
 
-    def get_obs(self) -> dict:
-        """
-        组装 mm_agents 期望的 obs dict。
+    #: 本机身能提供的观测键。镜头装载时拿它做能力比对（src/agents/mount.py）。
+    #: 没有 accessibility_tree —— pyatspi 在沙箱里装不上，见 osworld_server.py 顶部。
+    #: screenshot_original 与 screenshot 同为未缩放原图；缩放由镜头自己做
+    #: （例如 qwen 的 smart_resize），机身不替它决定。
+    OBS_KEYS = ("screenshot", "screenshot_original")
 
-        只给 screenshot：a11y_tree 在本沙箱不可用（pyatspi 装不上），所以 agent 侧
-        observation_type 要设成 "screenshot"。
+    def get_obs(self, keys: Optional[Sequence[str]] = None) -> dict:
         """
-        return {"screenshot": self.screenshot()}
+        组装镜头要的 obs dict。keys 为 None 时只给 screenshot。
+
+        同一张截图只抓一次，多个键共享同一份 bytes。
+        """
+        wanted = tuple(keys) if keys else ("screenshot",)
+        unknown = [k for k in wanted if k not in self.OBS_KEYS]
+        if unknown:
+            raise PixelEnvError(
+                f"本机身不提供观测 {unknown}；可提供 {list(self.OBS_KEYS)}。")
+        shot = self.screenshot()
+        return {k: shot for k in wanted}
 
     def get_screen_size(self) -> dict:
         return self._post_json("/screen_size", {}, timeout=60) or {}

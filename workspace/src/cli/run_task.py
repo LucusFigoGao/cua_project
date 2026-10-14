@@ -24,24 +24,33 @@ import time
 
 os.environ.setdefault("NO_PROXY", "*.tencentags.com,*.woa.com,*.tencentyun.com")
 
-from src.agents.bridge import ScreenshotAgent, run_episode
+from src.agents import mount
+from src.runner.episode import run_episode
 from src.sandbox import apps_host
 from src.sandbox import osworld_server as osw
 from src.sandbox.pixel_env import PixelSandboxEnv
 from src.sandbox.pool import AppsUnreachableError, SandboxPool
-from src.settings import DEFAULT_MAX_TOKENS, RESULTS
+from src.settings import RESULTS
 from src.tasks import catalog, push
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", help="task_id，默认取实例上已推送的第一个")
-    ap.add_argument("--model", default="qwen3.8-max", help="ichat 上的模型名")
+    ap.add_argument("--lens", default="qwen-cua",
+                    help="用哪只镜头；--lenses 看全部")
+    ap.add_argument("--lenses", action="store_true", help="列出已注册镜头后退出")
+    ap.add_argument("--model", default=None, help="覆盖镜头的默认模型")
     ap.add_argument("--max-steps", type=int, default=10)
-    ap.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    ap.add_argument("--max-tokens", type=int, default=None,
+                    help="覆盖镜头默认值；不给则用镜头自己的默认")
     ap.add_argument("--pause", type=float, default=1.0, help="每个动作后等待秒数")
     ap.add_argument("--list", action="store_true", help="列出实例上可跑的任务后退出")
     args = ap.parse_args()
+
+    if args.lenses:
+        print(mount.describe())
+        return 0
 
     local = {t.task_id: t for t in catalog.load_tasks()}
     if not local:
@@ -91,14 +100,29 @@ def main() -> int:
             return 1
         spec = local[task_id]
 
-        print(f"task    : {task_id}")
-        print(f"app     : {spec.app_type}  port {spec.port}")
-        print(f"model   : {args.model}   max_steps={args.max_steps}")
-        print(f"\n指令    : {spec.instruction}\n")
-
-        # ── 1. server + 初始状态 ─────────────────────────────────────────────
+        # ── 1. server + 装镜头 + 初始状态 ───────────────────────────────────
         osw.ensure_server(sbx)
         env = PixelSandboxEnv(sbx, install=False)
+
+        # 装载时就做能力比对：镜头要的观测机身给不了，当场报错，
+        # 不要等 rollout 跑到第 5 步才炸。
+        try:
+            # 只传显式给出的旋钮。各镜头接受的参数不一样（GeminiFCAgent
+            # 就没有 max_tokens），无条件塞会直接 TypeError。
+            knobs = {}
+            if args.max_tokens is not None:
+                knobs["max_tokens"] = args.max_tokens
+            lens = mount.load(args.lens, model=args.model,
+                              env_obs_keys=env.OBS_KEYS, **knobs)
+        except mount.LensError as e:
+            print(f"[FAIL] 装载镜头失败: {e}")
+            return 1
+
+        print(f"task    : {task_id}")
+        print(f"app     : {spec.app_type}  port {spec.port}")
+        print(f"lens    : {lens.name}  model={lens.model}  "
+              f"coord={lens.spec.coordinate_space}  max_steps={args.max_steps}")
+        print(f"\n指令    : {spec.instruction}\n")
 
         print("[ 1/4 ] 注入初始状态（initial_setup.py）...")
         # 实例是复用的，之前任务 launch_gui 开的标签页还留着（没人关）。截图里标签栏
@@ -128,21 +152,17 @@ def main() -> int:
         base_score = _reward(sbx, task_id)
         print(f"        动作前 REWARD = {base_score}")
 
-        # ── 3. agent loop ───────────────────────────────────────────────────
-        print(f"[ 3/4 ] agent 开始操作（最多 {args.max_steps} 步）...")
+        # ── 3. rollout ──────────────────────────────────────────────────────
+        print(f"[ 3/4 ] {lens.name} 开始操作（最多 {args.max_steps} 步）...")
         out_dir = RESULTS / task_id
-        agent = ScreenshotAgent(model=args.model, max_tokens=args.max_tokens)
         t0 = time.time()
-        try:
-            ep = run_episode(env, spec.instruction, agent, max_steps=args.max_steps,
-                             pause=args.pause, screenshot_dir=out_dir / "screenshots")
-        except Exception as e:
-            print(f"        [agent 异常] {type(e).__name__}: {str(e)[:300]}")
-            ep = {"steps": 0, "done": False, "verdict": None, "trajectory": [],
-                  "error": f"{type(e).__name__}: {e}"}
+        ep = run_episode(env, spec.instruction, lens, max_steps=args.max_steps,
+                         pause=args.pause, screenshot_dir=out_dir / "screenshots")
         elapsed = time.time() - t0
-        print(f"        跑了 {ep['steps']} 步，{elapsed:.0f}s，"
-              f"verdict={ep.get('verdict')}")
+        print(f"        {ep['steps']} 步 / 执行 {ep['actions_executed']} 个动作，"
+              f"{elapsed:.0f}s，结束于 {ep['stop_reason']}")
+        if ep["parse_miss_steps"]:
+            print(f"        [注意] {ep['parse_miss_steps']} 步疑似解析失败伪装成 DONE")
         if ep.get("error"):
             print(f"        [提前结束] {ep['error'][:200]}")
 
@@ -152,17 +172,29 @@ def main() -> int:
         print(f"        动作后 REWARD = {final_score}")
 
         out_dir.mkdir(parents=True, exist_ok=True)
+        # 真正该看的是增量而不是终值：部分 reward.py 含反向检查项，
+        # 什么都不做反而先得分（NO-OP 任务基线直接就是 1.0）。
+        delta = None
+        if base_score is not None and final_score is not None:
+            delta = round(final_score - base_score, 4)
+
         result = {
             "task_id": task_id,
             "app_type": spec.app_type,
             "instruction": spec.instruction,
-            "model": args.model,
+            "lens": ep["lens"],
+            "model": ep["model"],
+            "coordinate_space": lens.spec.coordinate_space,
             "sid": sid,
             "steps": ep["steps"],
             "max_steps": args.max_steps,
+            "actions_executed": ep["actions_executed"],
             "verdict": ep.get("verdict"),
+            "stop_reason": ep["stop_reason"],
+            "parse_miss_steps": ep["parse_miss_steps"],
             "baseline_reward": base_score,
             "final_reward": final_score,
+            "reward_delta": delta,
             "elapsed_sec": round(elapsed, 1),
             "error": ep.get("error"),
             "trajectory": ep["trajectory"],
@@ -171,8 +203,7 @@ def main() -> int:
             json.dumps(result, indent=2, ensure_ascii=False))
 
         print(f"\n=== 结果 ===")
-        print(f"  {base_score} → {final_score}"
-              f"{'  (分数提升)' if (final_score or 0) > (base_score or 0) else ''}")
+        print(f"  REWARD {base_score} → {final_score}   delta={delta}")
         print(f"  轨迹与截图: {out_dir}")
         return 0
 
@@ -182,12 +213,20 @@ def main() -> int:
 
 
 def _reward(sbx, task_id: str):
-    """跑 reward.py 并解析 REWARD: 分数。解析不到返回 None。"""
+    """
+    跑 reward.py 并解析分数。解析不到返回 None。
+
+    两种输出格式都要认：1048 个任务打印 `REWARD: 0.5`，另有 14 个只打印
+    `Score: 3/6 = 0.5`。只匹配前者会把那 14 个静默记成「无分数」。
+    """
     r = sbx.commands.run(
         f"cd {push.REMOTE_ROOT}/{task_id} && python3 reward.py 2>&1 || true", timeout=180)
     out = (r.stdout or "") + (r.stderr or "")
-    m = re.search(r"REWARD:\s*([\d.]+)", out)
-    return float(m.group(1)) if m else None
+    for pattern in (r"REWARD:\s*([\d.]+)", r"Score:.*?=\s*([\d.]+)"):
+        m = re.search(pattern, out)
+        if m:
+            return float(m.group(1))
+    return None
 
 
 if __name__ == "__main__":
