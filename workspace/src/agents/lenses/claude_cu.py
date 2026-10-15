@@ -8,8 +8,7 @@ anthropic/utils.py::make_anthropic_client，那个 helper 只接 api_key，不�
 base_url。好在 Anthropic SDK 认 ANTHROPIC_BASE_URL 环境变量，所以在构造前设上
 即可——osworld/ 下的文件仍然不动。
 
-它要两个观测键：screenshot 和 screenshot_original。机身两个都提供（同一份未缩放
-原图），缩放由镜头自己决定。
+它要两个观测键：screenshot 和 screenshot_original。机身两个都提供（同一份未缩放原图），缩放由镜头自己决定。
 """
 import os
 from typing import Any

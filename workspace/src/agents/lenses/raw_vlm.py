@@ -121,9 +121,6 @@ class ScreenshotAgent:
                 content = (msg.get("content") or "").strip()
                 if content:
                     return content
-                # 思维链模型（qwen3.x 等）把预算花在 reasoning_content 上，
-                # max_tokens 给小了 content 就是空的。重试时翻倍预算，
-                # 否则同样的 max_tokens 重试几次都是空。
                 det = (data.get("usage") or {}).get("completion_tokens_details") or {}
                 last = (f"模型返回空 content（reasoning_tokens="
                         f"{det.get('reasoning_tokens')}，max_tokens={budget}）")

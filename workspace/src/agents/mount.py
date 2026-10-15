@@ -1,8 +1,7 @@
 """
 镜头卡口：把 osworld/mm_agents 下的各式 agent 接到 PixelSandboxEnv 上。
 
-机身（PixelSandboxEnv + runner）不认识任何具体模型，只认这套卡口。换模型 =
-换一只镜头，机身不动。
+机身（PixelSandboxEnv + runner）不认识任何具体模型，只认这套卡口。换模型 = 换一只镜头，机身不动。
 
 卡口标准不是这里发明的，是 osworld/mm_agents 下 36 个 agent 的既有约定：
 
@@ -18,15 +17,16 @@
 分支之后，设成 "screenshot" 就不会去读。唯一的真依赖是 observation_type="som"
 ——它的动作空间定义在标注节点上，画框要 a11y，沙箱里用不了。
 """
-import logging
+
 import sys
+import logging
+
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Sequence
 
 from src.settings import ICHAT_CHANNELS, PROJECT_ROOT, ichat_key
 
-# mm_agents 在 osworld/ 下，不是本包的一部分。在卡口这里统一加 path，所有镜头
-# 都能直接 import；放在某只镜头里会让其他镜头依赖导入顺序。
+# mm_agents 在 osworld/ 下，不是本包的一部分。在卡口这里统一加 path，所有镜头都能直接 import；放在某只镜头里会让其他镜头依赖导入顺序。
 _OSWORLD = str(PROJECT_ROOT / "osworld")
 if _OSWORLD not in sys.path:
     sys.path.insert(0, _OSWORLD)
