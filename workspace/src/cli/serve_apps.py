@@ -90,7 +90,7 @@ def main() -> int:
         return 1
 
     print(f"\n总耗时 {time.time() - t0:.0f}s")
-    print("\n下一步: python -m src.cli.run   （实例会自动把 hosts 指向本机）")
+    print("\n下一步: python -m src.cli.manage_pool   （实例会自动把 hosts 指向本机）")
     return 0
 
 
