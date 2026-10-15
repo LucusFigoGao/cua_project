@@ -55,3 +55,6 @@ workspace/tasks_data/*
 workspace/results/
 
 .cache
+
+workspace-mobile/
+support/
