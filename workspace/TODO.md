@@ -21,8 +21,7 @@ src/runner/episode.py        机身：快门时序、分步日志、动作计数
 | `raw-vlm` + `gemini-3.5-flash` | openai | 跑通 |
 | `gemini-cu` | google_genai | 通道通，但上游 scaffold 崩（见下） |
 
-**所有模型都能走 OpenAI 协议**（`http://ichat.woa.com/api/external`），原生 SDK
-通道不是必需的。`raw-vlm` 不挑模型，`--model` 换任何模型即可。
+**所有模型都能走 OpenAI 协议**，原生 SDK 通道不是必需的。`raw-vlm` 不挑模型，`--model` 换任何模型即可。
 
 ### gemini-cu 的已知问题
 
