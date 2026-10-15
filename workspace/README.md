@@ -49,7 +49,7 @@ workspace/
     ├── settings.py            路径 / 模板 / 端口等共享常量
     ├── cli/
     │   ├── serve_apps.py      【开发机】起/停/查 31 个 app
-    │   ├── run.py             取一个实例（24h，复用不 kill）
+    │   ├── manage_pool.py     池运维：预热 / 查看 / 回收 busy / 销毁
     │   ├── unpack_tasks.py    【一次性】归档 → tasks_data/
     │   ├── push_tasks.py      选任务打 tar 推实例
     │   └── run_task.py        单任务闭环：setup → agent → reward
@@ -99,7 +99,10 @@ python -m src.cli.serve_apps --restart
 python -m src.cli.serve_apps --stop
 
 # ── 实例与任务 ──────────────────────────────────────────────
-python -m src.cli.run                   # 取一个实例（24h，秒级，复用不 kill）
+python -m src.cli.manage_pool           # 预热：保证池里有一个就绪实例（24h，复用不 kill）
+python -m src.cli.manage_pool --status  # 列出实例及 idle/busy
+python -m src.cli.manage_pool --release-all   # 回收卡在 busy 的实例（确认无其他任务在跑）
+python -m src.cli.manage_pool --kill-all --yes
 python -m src.cli.push_tasks --per-app 3 # 推任务（默认每 app 3 个）
 python -m src.cli.push_tasks --all       # 推全部 1062 个
 python -m src.cli.push_tasks --dry-run   # 只看选中了哪些
@@ -114,7 +117,7 @@ python -m src.smoke_test.test_task_from_archive   # 任务链路
 python -m src.smoke_test.test_pool                # 池的获取/归还/校准
 ```
 
-所有脚本假定 app 已在开发机上跑着；没跑的话 `run.py` / `run_task.py` 直接提示去执行
+所有脚本假定 app 已在开发机上跑着；没跑的话 `manage_pool.py` / `run_task.py` 直接提示去执行
 `serve_apps.py --start`，不会白白建实例。**所有脚本都不 kill 实例**，跑完
 `release()` 回到 idle 继续复用。`unpack_tasks.py` 和 `push_tasks.py` 幂等。
 
