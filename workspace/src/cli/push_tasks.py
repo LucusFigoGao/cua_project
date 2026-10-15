@@ -2,35 +2,26 @@
 """
 从 tasks_data/ 选一批任务推送到池里的沙箱实例。
 
-走 SandboxPool 的正常复用路径（reconcile → acquire → release），**不 kill 实例**：
-实例上 31 个 app 的部署成本是一次性的（~176s），push 完还要继续用。
+走 SandboxPool 的正常复用路径（reconcile → acquire → release），不 kill 实例。
 
-前置：先跑一次 python workspace/unpack_tasks.py 生成 tasks_data/。
+前置：先跑一次 python -m src.cli.unpack_tasks 生成 tasks_data/。
 
 Usage:
-    python workspace/push_tasks.py                      # 每个 app 取 3 个
-    python workspace/push_tasks.py --per-app 10
-    python workspace/push_tasks.py --all                # 全部 1062 个
-    python workspace/push_tasks.py --app instacart_mock --app slack_mock --per-app 5
-    python workspace/push_tasks.py --dry-run            # 只打印选中的任务，不碰实例
+    python -m src.cli.push_tasks                      # 每个 app 取 3 个
+    python -m src.cli.push_tasks --per-app 10
+    python -m src.cli.push_tasks --all                # 全部 1062 个
+    python -m src.cli.push_tasks --app instacart_mock --app slack_mock --per-app 5
+    python -m src.cli.push_tasks --dry-run            # 只打印选中的任务，不碰实例
 """
 import argparse
 import os
 import sys
-from pathlib import Path
-
-WORKSPACE = Path(__file__).parent
-sys.path.insert(0, str(WORKSPACE))
 
 os.environ.setdefault("NO_PROXY", "*.tencentags.com,*.woa.com,*.tencentyun.com")
 
-from sandbox.pool import SandboxPool
-from tasks import catalog, push
+from src.sandbox.pool import SandboxPool
+from src.tasks import catalog, push
 
-TEMPLATE = "sdt-hojglb51"
-TIMEOUT = 86400  # 24 小时
-MAX_SIZE = 12
-REGISTRY = WORKSPACE / "configs" / "sandbox_pool.json"
 
 
 def main() -> int:
@@ -46,7 +37,7 @@ def main() -> int:
     all_tasks = catalog.load_tasks()
     if not all_tasks:
         print(f"[FAIL] {catalog.DATA_DIR} 下没有任务。")
-        print("       先跑: python workspace/unpack_tasks.py")
+        print("       先跑: python -m src.cli.unpack_tasks")
         return 1
 
     s = catalog.stats(all_tasks)
@@ -75,11 +66,11 @@ def main() -> int:
 
     # ── 取实例（复用，不新建）────────────────────────────────────────────────
     print()
-    pool = SandboxPool(REGISTRY, template=TEMPLATE, max_size=MAX_SIZE, timeout=TIMEOUT)
+    pool = SandboxPool()
     print("[ 1/3 ] pool.reconcile ...")
     result = pool.reconcile()
-    idle = [c.sandbox_id for c in pool._instances.values() if c.status == "idle"]
-    print(f"        池内 {len(pool._instances)} 个实例，{len(idle)} 个 idle "
+    idle = pool.idle_ids()
+    print(f"        池内 {len(pool.instances())} 个实例，{len(idle)} 个 idle "
           f"(removed={len(result['removed'])} added={len(result['added'])})")
 
     print("[ 2/3 ] pool.acquire ...")
@@ -102,14 +93,14 @@ def main() -> int:
             print("        [WARN] shim 未就绪，任务脚本里的 launch_gui 会失败")
     finally:
         # 保持 running 回到 idle，不 kill
-        pool.release(cfg.sandbox_id, sbx=sbx, pause=False)
-        final = pool._instances.get(cfg.sandbox_id)
+        pool.release(cfg.sandbox_id)
+        final = pool.get(cfg.sandbox_id)
         print(f"\n已 release，实例 status={final.status if final else '?'}（未销毁）")
 
     print("\n=== 完成 ===")
     print(f"sandbox_id : {cfg.sandbox_id}")
     print(f"任务位置   : {args.remote_root}/<task_id>/")
-    print("\n验证: python workspace/smoke_test/test_task_from_archive.py")
+    print("\n验证: python -m src.smoke_test.test_task_from_archive")
     return 0
 
 

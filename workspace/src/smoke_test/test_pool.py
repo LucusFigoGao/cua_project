@@ -3,29 +3,28 @@
 SandboxPool smoke test — hits real AGS API.
 
 Tests:
-  1. Sandbox.create          — 新建实例是否正常
-  2. pool.acquire (新建)     — 池为空时建实例并自动部署 31 个 app（~3-5 min）
-  3. pool.release (pause=False) — release 后实例保持 running，回到 idle
-  4. pool.acquire (复用)     — 复用已 idle 实例，且不重新部署（秒级返回）
-  5. pool.reconcile          — 远端校准是否正常
+  1. Sandbox.create     — 新建实例是否正常
+  2. pool.acquire       — 池为空时建实例并接通开发机上的 app（写 hosts，秒级）
+  3. pool.release       — release 后实例保持 running，回到 idle
+  4. pool.acquire       — 复用已 idle 实例（秒级返回）
+  5. pool.reconcile     — 远端校准是否正常
 
-注意：第 2 步会触发一次完整的 31-app 部署，整个脚本跑完约需 5-6 分钟。
+前置：31 个 app 要先在开发机上跑起来（python -m src.cli.serve_apps --start）。
+整个脚本约 1-2 分钟。
 
 Usage:
-    python workspace/smoke_test/test_pool.py
+    python -m src.smoke_test.test_pool
 """
-import sys
 import time
 import traceback
 from pathlib import Path
 
-WORKSPACE = Path(__file__).parent.parent
-sys.path.insert(0, str(WORKSPACE))
-
 from e2b import Sandbox
-from sandbox.pool import SandboxPool
+from src.sandbox.pool import AppsUnreachableError, SandboxPool
 
-TEMPLATE = "sdt-hojglb51"
+from src.settings import SANDBOX_TEMPLATE
+
+# 用独立 registry，不污染生产池的 configs/sandbox_pool.json
 REGISTRY = Path(__file__).parent / "_smoke_registry.json"
 SANDBOX_TIMEOUT = 300
 
@@ -63,7 +62,7 @@ def _cleanup():
 
 def main():
     print("=== SandboxPool smoke test ===")
-    print(f"template : {TEMPLATE}")
+    print(f"template : {SANDBOX_TEMPLATE}")
     print(f"registry : {REGISTRY}")
 
     try:
@@ -71,7 +70,7 @@ def main():
         _section("1. Sandbox.create")
         try:
             sbx = Sandbox.create(
-                template=TEMPLATE,
+                template=SANDBOX_TEMPLATE,
                 timeout=SANDBOX_TIMEOUT,
                 metadata={"pool": "smoke_test"},
             )
@@ -84,9 +83,10 @@ def main():
             _fail("Sandbox.create/kill failed — cannot continue", e)
             return
 
-        # ── 2. pool.acquire (新建 + 自动部署 31 个 app) ──────────────────────
-        _section("2. pool.acquire — 池为空，新建实例并自动部署 31 个 app")
-        pool = SandboxPool(REGISTRY, template=TEMPLATE, max_size=2, timeout=SANDBOX_TIMEOUT)
+        # ── 2. pool.acquire (新建 + 配好 hosts 映射) ─────────────────────────
+        _section("2. pool.acquire — 池为空，新建实例并接通开发机上的 app")
+        pool = SandboxPool(REGISTRY, template=SANDBOX_TEMPLATE, max_size=2,
+                       timeout=SANDBOX_TIMEOUT)
         try:
             t0 = time.time()
             pool_cfg, pool_sbx = pool.acquire(block=False)
@@ -94,9 +94,16 @@ def main():
             _cleanup_ids.append(pool_cfg.sandbox_id)
             pool_sid = pool_cfg.sandbox_id
             _ok(f"acquired {pool_sid}  status={pool_cfg.status}  "
-                f"apps_ready={pool_cfg.apps_ready}  耗时 {first_elapsed:.0f}s")
-            if not pool_cfg.apps_ready:
-                _fail("apps_ready=False —— acquire 本应 kill 坏实例后重建")
+                f"apps_ready={pool_cfg.apps_ready}  app_host={pool_cfg.app_host}  "
+                f"耗时 {first_elapsed:.0f}s")
+            # app 装在开发机上，新实例只需写一行 hosts，不该再出现分钟级的部署耗时
+            if first_elapsed > 90:
+                _fail(f"新建耗时 {first_elapsed:.0f}s，疑似仍在沙箱内部署 app")
+            else:
+                _ok(f"新建实例 {first_elapsed:.0f}s（app 在开发机上，无需沙箱内部署）")
+        except AppsUnreachableError as e:
+            _fail(f"开发机上的 app 不可达，先跑 serve_apps.py --start: {e}")
+            return
         except Exception as e:
             _fail("pool.acquire (create) failed — skipping pool tests", e)
             return
@@ -104,8 +111,8 @@ def main():
         # ── 3. pool.release (pause=False，保持 running) ──────────────────────
         _section("3. pool.release (pause=False — 沙箱保持 running)")
         try:
-            pool.release(pool_sid, sbx=pool_sbx, pause=False)
-            cfg = pool._instances.get(pool_sid)
+            pool.release(pool_sid)
+            cfg = pool.get(pool_sid)
             _ok(f"sandbox {pool_sid}  status={cfg.status if cfg else 'missing'}")
         except Exception as e:
             _fail("pool.release failed — skipping reacquire test", e)
@@ -124,7 +131,7 @@ def main():
                 _ok(f"复用未重新部署（首次 {first_elapsed:.0f}s → 复用 {reuse_elapsed:.0f}s）")
             else:
                 _fail(f"复用耗时 {reuse_elapsed:.0f}s，疑似重跑了部署流程")
-            pool.release(cfg2.sandbox_id, sbx=sbx2, pause=False)
+            pool.release(cfg2.sandbox_id)
         except Exception as e:
             _fail(f"pool.acquire (reuse) failed: {e}", e)
 
@@ -133,7 +140,7 @@ def main():
         try:
             result = pool.reconcile()
             _ok(f"removed={result['removed']}  added={result['added']}")
-            print(f"  pool now tracks {len(pool._instances)} instance(s)")
+            print(f"  pool now tracks {len(pool.instances())} instance(s)")
         except Exception as e:
             _fail(f"reconcile failed: {e}", e)
 
