@@ -186,7 +186,7 @@ class SandboxPool:
             raise AppsUnreachableError(
                 f"开发机 {result['host_ip']} 上有 {len(result['down'])} 个 app 不可达"
                 f"（{', '.join(result['down'][:5])}{'...' if len(result['down']) > 5 else ''}）。"
-                f"请先在开发机执行: python -m workspace.src.serve_apps --start")
+                f"请先在开发机执行: python -m src.cli.serve_apps --start")
 
     def _drop_dead_locked(self, sandbox_id: str) -> None:
         """connect 失败等实例级故障的清理：kill 掉坏实例并从 registry 移除，好让下一轮重新创建。"""
