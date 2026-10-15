@@ -1,5 +1,5 @@
 """
-Qwen-CUA 镜头：osworld/mm_agents/qwen 的 QwenAgent。
+Qwen-CUA adapter：osworld/mm_agents/qwen 的 QwenAgent。
 
 那个包是 Qwen-CUA 论文（arXiv 2608.02352）的官方 scaffold，README 示例模型
 qwen3.7-plus，与 ichat 上的 qwen3.8-max 同代。它自带几样我们本来要自己写的东西：
@@ -13,7 +13,7 @@ qwen3.7-plus，与 ichat 上的 qwen3.8-max 同代。它自带几样我们本来
 不用同目录的 qwen3vl_agent.py：它的 _call_llm_openai 不处理 reasoning_content，
 走 openai 后端会静默返回空串；且 tool_call 是 JSON 格式，与本包的 XML 格式不通用。
 """
-from src.agents.mount import LensSpec, register
+from src.agents.registry import AdapterSpec, register
 
 
 def _silence_debug_dump() -> None:
@@ -31,7 +31,7 @@ def build(*, model: str, base_url: str, api_key: str, **kw):
     return QwenAgent(model=model, base_url=base_url, api_key=api_key, **kw)
 
 
-register(LensSpec(
+register(AdapterSpec(
     name="qwen-cua",
     build=build,
     default_model="qwen3.8-max",

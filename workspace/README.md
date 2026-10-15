@@ -64,7 +64,10 @@ workspace/
     │   ├── catalog.py         读 tasks_data/，筛选 + 分层取样
     │   └── push.py            tar 上传 + google-chrome shim
     ├── agents/
-    │   └── bridge.py          ScreenshotAgent + run_episode
+    │   ├── registry.py        统一接口 + 注册表 + 装载校验
+    │   └── adapters/          每个 agent 一个 adapter：qwen_cua / qwen3vl / claude_cu / gemini_cu / raw_vlm
+    ├── runner/
+    │   └── episode.py         episode 循环：观测 → predict → 执行，直到 DONE/FAIL/步数用完
     └── smoke_test/
         ├── test_pool.py               池的获取/归还/校准
         ├── test_task_from_archive.py  任务解包→推送→setup→reward
@@ -72,7 +75,8 @@ workspace/
 ```
 
 所有模块用绝对导入（`from src.xxx import` / `from mm_agents.xxx import`），
-不在代码里改 `sys.path`——路径由 `env.sh` 的 `PYTHONPATH` 提供。
+路径由 `env.sh` 的 `PYTHONPATH` 提供。唯一例外是 `src/agents/registry.py` 会把 `osworld/`
+补进 `sys.path`，保证不经 `env.sh` 直接 import adapter 时也能找到 `mm_agents`。
 
 ---
 
@@ -109,7 +113,9 @@ python -m src.cli.push_tasks --dry-run   # 只看选中了哪些
 
 # ── 跑任务 ──────────────────────────────────────────────────
 python -m src.cli.run_task --list
-python -m src.cli.run_task --task <id> --model qwen3.8-max --max-steps 10
+python -m src.cli.run_task --list-agents                     # 列出已注册的 agent
+python -m src.cli.run_task --task <id> --agent qwen-cua --max-steps 10
+python -m src.cli.run_task --task <id> --agent raw-vlm --model gemini-3.5-flash
 
 # ── 验证 ────────────────────────────────────────────────────
 python -m src.smoke_test.test_osworld_server      # 观测+动作（11/11）
@@ -205,18 +211,32 @@ reconcile 回来的，都要重配；hosts 写入幂等，成本可忽略。app 
 起 python3 子进程 60ms + `import pyautogui` 416ms，后者是 OSWorld 协议固有的
 （每动作走 subprocess 重新 import），相对 agent 一次推理可忽略。
 
-### agent 接入（`src/agents/bridge.py` + `run_task.py`）
+### agent 接入（`src/agents/` + `src/runner/episode.py`）
 
-`bridge.py` 自己发 HTTP 请求，但**系统提示词**（`SYS_PROMPT_IN_SCREENSHOT_OUT_CODE`）和
-**动作解析**（`parse_code_from_string`）从 `mm_agents` 原样 import，保证行为与官方
-baseline 一致。不直接用 `mm_agents.PromptAgent`，因为它的 HTTP 层与 ichat 不兼容：
-`agent.py:620` 只有 `model.startswith("gpt")` 才走 `OPENAI_BASE_URL`；`agent.py:624`
-两种 URL 拼法都带 `/v1`，而 ichat 的真实路径是 `{BASE}/chat/completions`（带 `/v1` 一律 404）；
-`model="qwen*"` 会在 `agent.py:1028` 走 dashscope SDK。若 ichat 日后支持 `/v1`，
-`ScreenshotAgent` 可整个删掉改用 `PromptAgent`。
+**类比：相机机身 + 卡口 + 镜头 + 转接环。**（只在这里用来帮助理解，代码里统一叫 env / registry / adapter。）
+
+| 类比 | 代码 | 职责 |
+|---|---|---|
+| 机身 | `PixelSandboxEnv` + `runner/episode.py` | 截图、执行动作、跑交互循环、记日志。不认识任何具体模型 |
+| 卡口 | `agents/registry.py` | 统一接口 `predict(instruction, obs) -> (text, actions)` / `reset(logger)`，装载时校验观测能力 |
+| 镜头 | `osworld/mm_agents/*` 里的 agent | 提示词、历史、解析——**原样复用，一行不改** |
+| 转接环 | `agents/adapters/*.py` | 把各 agent 接到卡口上：注入 base_url、补 HTTP 层缺陷、翻译动作格式 |
+
+换模型 = 换 adapter（`--agent`），机身不动。卡口标准沿用 `mm_agents` 下 36 个 agent 的既有约定，
+不是新发明的。动作两种格式机身都接受：`str` 当 pyautogui 代码，`dict` 当 computer_13。
+
+| `--agent` | 包的 agent | 通道 | 坐标 | adapter 做了什么 |
+|---|---|---|---|---|
+| `qwen-cua`（默认） | `mm_agents.qwen.QwenAgent`（Qwen-CUA 官方） | openai | relative | 关掉每步写 `./draft/` 的调试转储 |
+| `qwen3vl` | `mm_agents.qwen3vl_agent.Qwen3VLAgent` | openai | relative | 替换 HTTP 层：直传 base_url、合并 `reasoning_content`、补 temperature、失败抛错、去掉 30s×5 外层重试 |
+| `claude-cu` | `mm_agents.anthropic.AnthropicAgent` | anthropic | absolute | 经 `ANTHROPIC_BASE_URL` 注入；tool_use dict 摊平成 pyautogui 串 |
+| `gemini-cu` | `mm_agents.gemini_agent.GeminiFCAgent` | google_genai | relative | function call 翻成 pyautogui、0-999 换算像素；重试 500→4 |
+| `raw-vlm` | 自写 `ScreenshotAgent`（提示词与解析从 `mm_agents` import） | openai | 未声明 | 自发请求，因为 `PromptAgent` 只认 `gpt*` 走 OpenAI 且 URL 带 `/v1`（ichat 404） |
+
+`qwen-cua` 与 `qwen3vl` 是同一家两代 scaffold，tool_call 格式不同（XML vs JSON），不能共用一个 adapter。
 
 qwen3.x 会先输出思维链（`reasoning_content`）再给 `content`，`max_tokens` 给小了
-`content` 会是空的，`bridge.py` 默认 `max_tokens=3000`。
+`content` 会是空的；各 adapter 默认 `max_tokens=16384`，`raw-vlm` / `qwen3vl` 遇空 content 翻倍重试。
 
 ---
 

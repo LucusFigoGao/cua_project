@@ -1,17 +1,17 @@
 """
-机身快门：跑一个 episode。
+episode 循环：跑一个 episode。
 
-时序照 osworld/lib_run_single.py 的 run_single_example：每步先拿观测给镜头，
+时序照 osworld/lib_run_single.py 的 run_single_example：每步先拿观测给 agent，
 再把吐出的动作逐条执行，遇到 DONE/FAIL 提前结束。
 
-机身不认识任何具体模型，只跟 src.agents.mount.Lens 打交道。分步日志、
-动作计数、提前结束的原因记录都在这里做一次，所有镜头共享。
+这里不认识任何具体模型，只跟 src.agents.registry.Adapter 打交道。分步日志、
+动作计数、提前结束的原因记录都在这里做一次，所有 agent 共享。
 """
 import time
 from pathlib import Path
 from typing import Optional, Union
 
-from src.agents.mount import SPECIAL, Lens, LensError
+from src.agents.registry import SPECIAL, Adapter, AdapterError
 
 
 def _looks_like_parse_miss(reply: str, actions: list) -> bool:
@@ -42,17 +42,17 @@ def _fmt(actions: list) -> str:
     return " | ".join(out) or "(无)"
 
 
-def run_episode(env, instruction: str, lens: Lens, max_steps: int = 10,
+def run_episode(env, instruction: str, agent: Adapter, max_steps: int = 10,
                 pause: float = 1.0, screenshot_dir: Union[str, Path, None] = None,
                 verbose: bool = True) -> dict:
-    lens.reset()
+    agent.reset()
     traj: list[dict] = []
     done = False
     verdict = None
     error = None
     stop_reason = "max_steps"
 
-    obs = env.get_obs(lens.obs_keys)
+    obs = env.get_obs(agent.obs_keys)
     for step in range(1, max_steps + 1):
         if screenshot_dir:
             Path(screenshot_dir).mkdir(parents=True, exist_ok=True)
@@ -60,13 +60,13 @@ def run_episode(env, instruction: str, lens: Lens, max_steps: int = 10,
 
         t0 = time.time()
         try:
-            reply, actions, extra = lens.predict(instruction, obs)
-        except (LensError, Exception) as e:
+            reply, actions, extra = agent.predict(instruction, obs)
+        except (AdapterError, Exception) as e:
             # 这一步挂了，但前面几步是真跑过的，保留它们再退出。
             error = f"{type(e).__name__}: {e}"
-            stop_reason = "lens_error"
+            stop_reason = "agent_error"
             if verbose:
-                print(f"  [step {step}] 镜头异常，保留前 {len(traj)} 步: {error[:160]}")
+                print(f"  [step {step}] agent 异常，保留前 {len(traj)} 步: {error[:160]}")
             break
         latency = time.time() - t0
 
@@ -100,11 +100,11 @@ def run_episode(env, instruction: str, lens: Lens, max_steps: int = 10,
         })
         if done:
             break
-        obs = env.get_obs(lens.obs_keys)
+        obs = env.get_obs(agent.obs_keys)
 
     return {
-        "lens": lens.name,
-        "model": lens.model,
+        "agent": agent.name,
+        "model": agent.model,
         "steps": len(traj),
         "done": done,
         "verdict": verdict,

@@ -1,22 +1,22 @@
 """
-Claude 镜头：osworld/mm_agents/anthropic 的 AnthropicAgent。
+Claude adapter：osworld/mm_agents/anthropic 的 AnthropicAgent。
 
 它已经吐 pyautogui 代码串，动作方言不需要翻译。
 
-base_url 的注入方式与另外两只不同：AnthropicAgent 内部走
+base_url 的注入方式与其他 adapter 不同：AnthropicAgent 内部走
 anthropic/utils.py::make_anthropic_client，那个 helper 只接 api_key，不接
 base_url。好在 Anthropic SDK 认 ANTHROPIC_BASE_URL 环境变量，所以在构造前设上
 即可——osworld/ 下的文件仍然不动。
 
-它要两个观测键：screenshot 和 screenshot_original。机身两个都提供（同一份未缩放原图），缩放由镜头自己决定。
+它要两个观测键：screenshot 和 screenshot_original。环境两个都提供（同一份未缩放原图），缩放由 agent 自己决定。
 """
 import os
 from typing import Any
 
-from src.agents.mount import LensSpec, register
+from src.agents.registry import AdapterSpec, register
 
 
-class ClaudeLens:
+class ClaudeAdapter:
     """
     把 AnthropicAgent 的 tool_use dict 摊平成 pyautogui 串。
 
@@ -67,10 +67,10 @@ def build(*, model: str, base_url: str, api_key: str, **kw):
     os.environ["ANTHROPIC_BASE_URL"] = base_url
     from mm_agents.anthropic.main import AnthropicAgent
 
-    return ClaudeLens(AnthropicAgent(model=model, api_key=api_key, **kw))
+    return ClaudeAdapter(AnthropicAgent(model=model, api_key=api_key, **kw))
 
 
-register(LensSpec(
+register(AdapterSpec(
     name="claude-cu",
     build=build,
     default_model="claude-sonnet-4-6",

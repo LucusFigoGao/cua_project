@@ -1,5 +1,5 @@
 """
-通用 VLM 镜头：不挑模型，任何能读图的 chat 模型都能装。
+通用 VLM adapter：不挑模型，任何能读图的 chat 模型都能装。
 
 提示词和动作解析从 osworld/mm_agents 原样 import（SYS_PROMPT_IN_SCREENSHOT_OUT_CODE、
 parse_code_from_string），行为对齐 PromptAgent 的 observation_type="screenshot" /
@@ -12,7 +12,7 @@ action_space="pyautogui" 组合。
 agent.py:1028 走 dashscope SDK。两条路都堵，所以这里自己发请求。
 
 注意：OSWorld 这套提示词**不声明屏幕分辨率或坐标空间**，模型输出用哪种坐标约定
-不受控。要受控请用 qwen-cua 镜头（它的 build_description_prompt 会明写）。
+不受控。要受控请用 qwen-cua adapter（它的 build_description_prompt 会明写）。
 """
 import base64
 import json
@@ -20,7 +20,7 @@ import time
 import urllib.error
 import urllib.request
 
-from src.agents.mount import LensSpec, register  # 先导入它，osworld path 在那里加
+from src.agents.registry import AdapterSpec, register  # 先导入它，osworld path 在那里加
 
 from mm_agents.agent import parse_code_from_string          # noqa: E402
 from mm_agents.prompts import SYS_PROMPT_IN_SCREENSHOT_OUT_CODE  # noqa: E402
@@ -138,7 +138,7 @@ def build(*, model: str, base_url: str, api_key: str, **kw):
     return ScreenshotAgent(model=model, base_url=base_url, api_key=api_key, **kw)
 
 
-register(LensSpec(
+register(AdapterSpec(
     name="raw-vlm",
     build=build,
     default_model="qwen3.8-max",

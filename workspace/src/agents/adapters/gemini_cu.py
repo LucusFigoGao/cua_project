@@ -1,10 +1,10 @@
 """
-Gemini 镜头：osworld/mm_agents/gemini_agent.py 的 GeminiFCAgent。
+Gemini adapter：osworld/mm_agents/gemini_agent.py 的 GeminiFCAgent。
 
 它接收一个构造好的 genai.Client，所以 ichat 的 google-genai 通道直接注入即可，
 不需要改 osworld/ 里的任何东西。
 
-这只镜头要做一层方言翻译，因为 GeminiFCAgent 吐的是第三种动作格式：
+这个 adapter 要做一层格式翻译，因为 GeminiFCAgent 吐的是第三种动作格式：
 
     {"action_type": "computer_agent_api:click", "parameters": {"x": .., "y": ..}}
 
@@ -15,7 +15,7 @@ Gemini 镜头：osworld/mm_agents/gemini_agent.py 的 GeminiFCAgent。
 import io
 from typing import Any
 
-from src.agents.mount import LensSpec, register
+from src.agents.registry import AdapterSpec, register
 
 _P = "computer_agent_api:"
 
@@ -90,7 +90,7 @@ def _to_pyautogui(action: dict, w: int, h: int) -> list[str]:
     return []
 
 
-class GeminiPyAutoGUILens:
+class GeminiPyAutoGUIAdapter:
     """包住 GeminiFCAgent，把它的 function call 翻成 pyautogui 串。"""
 
     def __init__(self, agent: Any):
@@ -132,11 +132,11 @@ def build(*, model: str, base_url: str, api_key: str, **kw):
     GeminiFCAgent = ga.GeminiFCAgent
 
     client = genai.Client(api_key=api_key, http_options={"base_url": base_url})
-    return GeminiPyAutoGUILens(
+    return GeminiPyAutoGUIAdapter(
         GeminiFCAgent(client=client, model_id=model, **kw))
 
 
-register(LensSpec(
+register(AdapterSpec(
     name="gemini-cu",
     build=build,
     default_model="gemini-3.5-flash",
@@ -145,7 +145,7 @@ register(LensSpec(
     coordinate_space="relative",
     # action_space="pyautogui" 用 COMPLETE_OSWORLD_ACTIONS 那 18 个
     # FunctionDeclaration；"gemini_computer_use" 走原生 Computer Use tool，
-    # 函数名与参数不同，本镜头的翻译表对不上。
+    # 函数名与参数不同，本 adapter 的翻译表对不上。
     defaults={"action_space": "pyautogui", "thinking_level": "medium"},
-    notes="function call 0-999 归一化，本镜头负责换算成像素",
+    notes="function call 0-999 归一化，本 adapter 负责换算成像素",
 ))

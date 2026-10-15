@@ -117,15 +117,15 @@ class PixelSandboxEnv:
             Path(local_out).write_bytes(data)
         return data
 
-    #: 本机身能提供的观测键。镜头装载时拿它做能力比对（src/agents/mount.py）。
+    #: 本环境能提供的观测键。agent 装载时拿它做能力比对（src/agents/registry.py）。
     #: 没有 accessibility_tree —— pyatspi 在沙箱里装不上，见 osworld_server.py 顶部。
-    #: screenshot_original 与 screenshot 同为未缩放原图；缩放由镜头自己做
-    #: （例如 qwen 的 smart_resize），机身不替它决定。
+    #: screenshot_original 与 screenshot 同为未缩放原图；缩放由 agent 自己做
+    #: （例如 qwen 的 smart_resize），环境不替它决定。
     OBS_KEYS = ("screenshot", "screenshot_original")
 
     def get_obs(self, keys: Optional[Sequence[str]] = None) -> dict:
         """
-        组装镜头要的 obs dict。keys 为 None 时只给 screenshot。
+        组装 agent 要的 obs dict。keys 为 None 时只给 screenshot。
 
         同一张截图只抓一次，多个键共享同一份 bytes。
         """
@@ -133,7 +133,7 @@ class PixelSandboxEnv:
         unknown = [k for k in wanted if k not in self.OBS_KEYS]
         if unknown:
             raise PixelEnvError(
-                f"本机身不提供观测 {unknown}；可提供 {list(self.OBS_KEYS)}。")
+                f"本环境不提供观测 {unknown}；可提供 {list(self.OBS_KEYS)}。")
         shot = self.screenshot()
         return {k: shot for k in wanted}
 

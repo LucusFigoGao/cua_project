@@ -24,7 +24,7 @@ import time
 
 os.environ.setdefault("NO_PROXY", "*.tencentags.com,*.woa.com,*.tencentyun.com")
 
-from src.agents import mount
+from src.agents import registry
 from src.runner.episode import run_episode
 from src.sandbox import apps_host
 from src.sandbox import osworld_server as osw
@@ -37,19 +37,19 @@ from src.tasks import catalog, push
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", help="task_id，默认取实例上已推送的第一个")
-    ap.add_argument("--lens", default="qwen-cua",
-                    help="用哪只镜头；--lenses 看全部")
-    ap.add_argument("--lenses", action="store_true", help="列出已注册镜头后退出")
-    ap.add_argument("--model", default=None, help="覆盖镜头的默认模型")
+    ap.add_argument("--agent", default="qwen-cua",
+                    help="用哪个 agent；--list-agents 看全部")
+    ap.add_argument("--list-agents", action="store_true", help="列出已注册 agent 后退出")
+    ap.add_argument("--model", default=None, help="覆盖该 agent 的默认模型")
     ap.add_argument("--max-steps", type=int, default=10)
     ap.add_argument("--max-tokens", type=int, default=None,
-                    help="覆盖镜头默认值；不给则用镜头自己的默认")
+                    help="覆盖 agent 默认值；不给则用 agent 自己的默认")
     ap.add_argument("--pause", type=float, default=1.0, help="每个动作后等待秒数")
     ap.add_argument("--list", action="store_true", help="列出实例上可跑的任务后退出")
     args = ap.parse_args()
 
-    if args.lenses:
-        print(mount.describe())
+    if args.list_agents:
+        print(registry.describe())
         return 0
 
     local = {t.task_id: t for t in catalog.load_tasks()}
@@ -100,28 +100,28 @@ def main() -> int:
             return 1
         spec = local[task_id]
 
-        # ── 1. server + 装镜头 + 初始状态 ───────────────────────────────────
+        # ── 1. server + 装载 agent + 初始状态 ──────────────────────────────
         osw.ensure_server(sbx)
         env = PixelSandboxEnv(sbx, install=False)
 
-        # 装载时就做能力比对：镜头要的观测机身给不了，当场报错，
+        # 装载时就做能力比对：agent 要的观测环境给不了，当场报错，
         # 不要等 rollout 跑到第 5 步才炸。
         try:
-            # 只传显式给出的旋钮。各镜头接受的参数不一样（GeminiFCAgent
+            # 只传显式给出的旋钮。各 agent 接受的参数不一样（GeminiFCAgent
             # 就没有 max_tokens），无条件塞会直接 TypeError。
             knobs = {}
             if args.max_tokens is not None:
                 knobs["max_tokens"] = args.max_tokens
-            lens = mount.load(args.lens, model=args.model,
-                              env_obs_keys=env.OBS_KEYS, **knobs)
-        except mount.LensError as e:
-            print(f"[FAIL] 装载镜头失败: {e}")
+            agent = registry.load(args.agent, model=args.model,
+                                  env_obs_keys=env.OBS_KEYS, **knobs)
+        except registry.AdapterError as e:
+            print(f"[FAIL] 装载 agent 失败: {e}")
             return 1
 
         print(f"task    : {task_id}")
         print(f"app     : {spec.app_type}  port {spec.port}")
-        print(f"lens    : {lens.name}  model={lens.model}  "
-              f"coord={lens.spec.coordinate_space}  max_steps={args.max_steps}")
+        print(f"agent   : {agent.name}  model={agent.model}  "
+              f"coord={agent.spec.coordinate_space}  max_steps={args.max_steps}")
         print(f"\n指令    : {spec.instruction}\n")
 
         print("[ 1/4 ] 注入初始状态（initial_setup.py）...")
@@ -153,10 +153,10 @@ def main() -> int:
         print(f"        动作前 REWARD = {base_score}")
 
         # ── 3. rollout ──────────────────────────────────────────────────────
-        print(f"[ 3/4 ] {lens.name} 开始操作（最多 {args.max_steps} 步）...")
+        print(f"[ 3/4 ] {agent.name} 开始操作（最多 {args.max_steps} 步）...")
         out_dir = RESULTS / task_id
         t0 = time.time()
-        ep = run_episode(env, spec.instruction, lens, max_steps=args.max_steps,
+        ep = run_episode(env, spec.instruction, agent, max_steps=args.max_steps,
                          pause=args.pause, screenshot_dir=out_dir / "screenshots")
         elapsed = time.time() - t0
         print(f"        {ep['steps']} 步 / 执行 {ep['actions_executed']} 个动作，"
@@ -182,9 +182,9 @@ def main() -> int:
             "task_id": task_id,
             "app_type": spec.app_type,
             "instruction": spec.instruction,
-            "lens": ep["lens"],
+            "agent": ep["agent"],
             "model": ep["model"],
-            "coordinate_space": lens.spec.coordinate_space,
+            "coordinate_space": agent.spec.coordinate_space,
             "sid": sid,
             "steps": ep["steps"],
             "max_steps": args.max_steps,
