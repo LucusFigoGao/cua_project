@@ -45,8 +45,8 @@ def main() -> int:
                     help="沙箱池上限（覆盖 POOL_MAX_SIZE，默认 12）")
     ap.add_argument("--sample-per-app", type=int, default=None,
                     help="每个 app 取 N 个任务；不给则全跑")
-    ap.add_argument("--exclude-app", action="append", default=[],
-                    help="排除某个 app（可多次指定）")
+    ap.add_argument("--exclude-app", default="",
+                    help="排除的 app，逗号分隔（如 monday_mock,discord_mock）")
     ap.add_argument("--tasks", default=None,
                     help="只跑指定的 task_id 列表文件（每行一个 id）")
     ap.add_argument("--resume", action="store_true",
@@ -77,7 +77,7 @@ def main() -> int:
 
     tasks = all_tasks
     if args.exclude_app:
-        excluded = set(args.exclude_app)
+        excluded = {a.strip() for a in args.exclude_app.split(",") if a.strip()}
         tasks = [t for t in tasks if t.app_type not in excluded]
 
     if args.tasks:
