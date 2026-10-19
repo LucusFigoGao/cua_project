@@ -21,7 +21,7 @@ from src.agents import registry
 from src.runner.batch_runner import BatchRunner, summarize
 from src.sandbox import apps_host
 from src.sandbox.pool import SandboxPool
-from src.settings import POOL_MAX_SIZE, RESULTS, SESSIONS
+from src.settings import RESULTS, SESSIONS
 from src.tasks import catalog
 
 
@@ -40,9 +40,8 @@ def main() -> int:
     ap.add_argument("--max-steps", type=int, default=10)
     ap.add_argument("--max-tokens", type=int, default=None)
     ap.add_argument("--pause", type=float, default=1.0)
-    ap.add_argument("--workers", type=int, default=4, help="并发 worker 数")
-    ap.add_argument("--max-instances", type=int, default=None,
-                    help="沙箱池上限（覆盖 POOL_MAX_SIZE，默认 12）")
+    ap.add_argument("--workers", type=int, default=4,
+                    help="并发数（同时跑多少个任务，每个占一个沙箱实例）")
     ap.add_argument("--sample-per-app", type=int, default=None,
                     help="每个 app 取 N 个任务；不给则全跑")
     ap.add_argument("--exclude-app", default="",
@@ -121,7 +120,7 @@ def main() -> int:
               f"{', '.join(down[:5])}")
         return 1
 
-    pool_max = args.max_instances or POOL_MAX_SIZE
+    pool_max = args.workers
     pool = SandboxPool(app_host=host_ip, max_size=pool_max)
     pool.reconcile()
 
@@ -136,8 +135,7 @@ def main() -> int:
         session_dir=session_dir, verbose=not args.quiet,
     )
 
-    print(f"\n开始批跑：{len(tasks)} 个任务，{args.workers} workers，"
-          f"pool_max={pool_max}\n")
+    print(f"\n开始批跑：{len(tasks)} 个任务，{args.workers} workers\n")
     t0 = time.time()
     results = runner.run(tasks)
     elapsed = time.time() - t0
@@ -148,7 +146,6 @@ def main() -> int:
     summary["model"] = resolved_model
     summary["max_steps"] = args.max_steps
     summary["workers"] = args.workers
-    summary["max_instances"] = pool_max
     summary["run_name"] = run_name
 
     summary_path = run_dir / "batch_summary.json"
