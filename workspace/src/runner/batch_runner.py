@@ -1,13 +1,13 @@
 """
 多线程批跑引擎：N 个 worker 消费任务队列，每个 worker 调用 run_one()。
 
-并发上限受 pool.max_size 约束（默认 12）。worker 通过 pool.acquire 自动排队，
+并发上限受 pool.max_size 约束。worker 通过 pool.acquire 自动排队，
 所以 workers > pool.max_size 也能工作（多余的 worker 会阻塞在 acquire 上）。
 """
 import logging
 import queue
 import threading
-import time
+from pathlib import Path
 from typing import Optional
 
 from src.runner.task import run_one
@@ -21,7 +21,8 @@ class BatchRunner:
     def __init__(self, pool: SandboxPool, agent_name: str, *,
                  model: Optional[str] = None, max_steps: int = 10,
                  pause: float = 1.0, max_tokens: Optional[int] = None,
-                 workers: int = 4, verbose: bool = True):
+                 workers: int = 4, run_dir: Optional[Path] = None,
+                 session_dir: Optional[Path] = None, verbose: bool = True):
         self.pool = pool
         self.agent_name = agent_name
         self.model = model
@@ -29,6 +30,8 @@ class BatchRunner:
         self.pause = pause
         self.max_tokens = max_tokens
         self.workers = workers
+        self.run_dir = run_dir
+        self.session_dir = session_dir
         self.verbose = verbose
         self._queue: queue.Queue[Optional[TaskSpec]] = queue.Queue()
         self._results: list[dict] = []
@@ -67,6 +70,7 @@ class BatchRunner:
                     self.pool, spec, self.agent_name,
                     model=self.model, max_steps=self.max_steps,
                     pause=self.pause, max_tokens=self.max_tokens,
+                    run_dir=self.run_dir, session_dir=self.session_dir,
                     verbose=self.verbose,
                 )
             except Exception as e:

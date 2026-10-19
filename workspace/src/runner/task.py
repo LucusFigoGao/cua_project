@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -17,7 +18,7 @@ from src.runner.episode import run_episode
 from src.sandbox import osworld_server as osw
 from src.sandbox.pixel_env import PixelSandboxEnv
 from src.sandbox.pool import SandboxPool
-from src.settings import RESULTS
+from src.settings import RESULTS, SESSIONS
 from src.tasks import push
 from src.tasks.catalog import TaskSpec
 
@@ -27,11 +28,13 @@ log = logging.getLogger(__name__)
 def run_one(pool: SandboxPool, spec: TaskSpec, agent_name: str, *,
             model: Optional[str] = None, max_steps: int = 10,
             pause: float = 1.0, max_tokens: Optional[int] = None,
+            run_dir: Optional[Path] = None, session_dir: Optional[Path] = None,
             verbose: bool = True) -> dict:
     """
-    端到端跑一个任务，返回 result dict（同时写入 results/<task_id>/result.json）。
+    端到端跑一个任务，返回 result dict（同时写入 result.json 和 session JSONL）。
 
-    自行 acquire / release / kill 实例。调用方不需要管理沙箱生命周期。
+    run_dir:     result.json 和 screenshots 的输出目录，默认 RESULTS/<task_id>
+    session_dir: session JSONL 的输出目录，默认 SESSIONS/<task_id>.jsonl
     """
     cfg, sbx = pool.acquire()
     stop_reason = None
@@ -39,7 +42,8 @@ def run_one(pool: SandboxPool, spec: TaskSpec, agent_name: str, *,
         result = _run_on_sandbox(
             pool, cfg, sbx, spec, agent_name,
             model=model, max_steps=max_steps, pause=pause,
-            max_tokens=max_tokens, verbose=verbose,
+            max_tokens=max_tokens, run_dir=run_dir,
+            session_dir=session_dir, verbose=verbose,
         )
         stop_reason = result.get("stop_reason")
         return result
@@ -66,7 +70,8 @@ def run_one(pool: SandboxPool, spec: TaskSpec, agent_name: str, *,
 
 
 def _run_on_sandbox(pool, cfg, sbx, spec, agent_name, *,
-                    model, max_steps, pause, max_tokens, verbose):
+                    model, max_steps, pause, max_tokens,
+                    run_dir, session_dir, verbose):
     task_id = spec.task_id
 
     push.ensure_sandbox_deps(sbx)
@@ -86,10 +91,8 @@ def _run_on_sandbox(pool, cfg, sbx, spec, agent_name, *,
         log.info("task=%s  app=%s  agent=%s  model=%s",
                  task_id, spec.app_type, agent.name, agent.model)
 
-    # 清残留标签
     env.reset_tabs()
 
-    # initial_setup
     sbx.commands.run("rm -f /tmp/task_web_sid", timeout=30)
     sbx.commands.run(
         f"cd {push.REMOTE_ROOT}/{task_id} && DISPLAY=:1 python3 initial_setup.py "
@@ -101,18 +104,15 @@ def _run_on_sandbox(pool, cfg, sbx, spec, agent_name, *,
         raise RuntimeError(f"initial_setup.py 未写出 sid。日志：\n{setup_log}")
     env.sleep(2)
 
-    # baseline reward
     base_score = _reward(sbx, task_id)
 
-    # episode
-    out_dir = RESULTS / task_id
+    out_dir = (run_dir / task_id) if run_dir else (RESULTS / task_id)
     t0 = time.time()
     ep = run_episode(env, spec.instruction, agent, max_steps=max_steps,
                      pause=pause, screenshot_dir=out_dir / "screenshots",
                      verbose=verbose)
     elapsed = time.time() - t0
 
-    # final reward
     final_score = _reward(sbx, task_id)
     delta = None
     if base_score is not None and final_score is not None:
@@ -144,11 +144,37 @@ def _run_on_sandbox(pool, cfg, sbx, spec, agent_name, *,
     (out_dir / "result.json").write_text(
         json.dumps(result, indent=2, ensure_ascii=False))
 
+    _write_session_jsonl(ep["trajectory"], task_id, session_dir)
+
     if verbose:
         log.info("task=%s  reward=%s→%s  delta=%s  steps=%d  stop=%s",
                  task_id, base_score, final_score, delta,
                  ep["steps"], ep["stop_reason"])
     return result
+
+
+def _write_session_jsonl(trajectory: list, task_id: str,
+                         session_dir: Optional[Path]):
+    """从 trajectory 生成 session JSONL，每行一步。"""
+    if not session_dir:
+        return
+    session_dir.mkdir(parents=True, exist_ok=True)
+    path = session_dir / f"{task_id}.jsonl"
+    with open(path, "w") as f:
+        for entry in trajectory:
+            extra = entry.get("extra") or {}
+            line = {
+                "step": entry["step"],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "raw_response": entry.get("reply", ""),
+                "actions": entry.get("actions", []),
+                "parse_miss": entry.get("parse_miss", False),
+                "truncated": entry.get("truncated", False),
+                "latency_sec": entry.get("latency_sec", 0),
+                "exec_result": entry.get("exec_result", {}),
+                "usage": extra.get("usage"),
+            }
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 
 def _reward(sbx: Sandbox, task_id: str):

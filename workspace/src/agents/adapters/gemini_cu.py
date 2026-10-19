@@ -99,7 +99,7 @@ class GeminiPyAutoGUIAdapter:
     def reset(self, _logger=None, *a, **kw):
         self.agent.reset(_logger)
 
-    def predict(self, instruction: str, obs: dict) -> tuple[str, list]:
+    def predict(self, instruction: str, obs: dict) -> tuple[str, list, dict]:
         from PIL import Image
         w, h = Image.open(io.BytesIO(obs["screenshot"])).size
 
@@ -113,7 +113,8 @@ class GeminiPyAutoGUIAdapter:
             if isinstance(a, dict):
                 actions.extend(_to_pyautogui(a, w, h))
         reply = "\n".join(thoughts) if thoughts else str(_text or "")
-        return reply, actions
+        usage = getattr(self.agent, "_last_usage", {})
+        return reply, actions, {"usage": usage}
 
 
 def build(*, model: str, base_url: str, api_key: str, **kw):
@@ -136,8 +137,25 @@ def build(*, model: str, base_url: str, api_key: str, **kw):
     GeminiFCAgent = ga.GeminiFCAgent
 
     client = genai.Client(api_key=api_key, http_options={"base_url": base_url})
-    return GeminiPyAutoGUIAdapter(
-        GeminiFCAgent(client=client, model_id=model, **kw))
+    agent = GeminiFCAgent(client=client, model_id=model, **kw)
+
+    # monkey-patch client.models.generate_content 捕获 response.usage_metadata
+    agent._last_usage = {}
+    _orig_gc = agent.client.models.generate_content
+
+    def _patched_gc(*a, **k):
+        resp = _orig_gc(*a, **k)
+        um = getattr(resp, "usage_metadata", None)
+        if um:
+            agent._last_usage = {
+                "prompt_tokens": getattr(um, "prompt_token_count", None),
+                "completion_tokens": getattr(um, "candidates_token_count", None),
+                "total_tokens": getattr(um, "total_token_count", None),
+            }
+        return resp
+    agent.client.models.generate_content = _patched_gc
+
+    return GeminiPyAutoGUIAdapter(agent)
 
 
 register(AdapterSpec(

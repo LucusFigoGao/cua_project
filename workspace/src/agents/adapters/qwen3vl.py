@@ -47,6 +47,15 @@ def _agent_cls():
     retryable = (openai.APIConnectionError, openai.APITimeoutError,
                  openai.RateLimitError, openai.InternalServerError)
 
+    def _extract_openai_usage(usage) -> dict:
+        if not usage:
+            return {}
+        return {
+            "prompt_tokens": getattr(usage, "prompt_tokens", None),
+            "completion_tokens": getattr(usage, "completion_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None),
+        }
+
     _SINGLE_ACTION_SUFFIX = (
         "\n- IMPORTANT: Output exactly ONE <tool_call> block per response. "
         "Never output multiple <tool_call> blocks in a single turn."
@@ -60,6 +69,7 @@ def _agent_cls():
                                          timeout=timeout)
             self._retries = retries
             self._max_token_ceiling = max_token_ceiling
+            self._last_usage: dict = {}
 
         def call_llm(self, payload, model):
             msgs = payload["messages"]
@@ -68,6 +78,12 @@ def _agent_cls():
                 if isinstance(content, str) and _SINGLE_ACTION_SUFFIX.strip() not in content:
                     msgs[0]["content"] = content + _SINGLE_ACTION_SUFFIX
             return self._call_llm_openai(msgs, model)
+
+        def predict(self, instruction, obs):
+            result = super().predict(instruction, obs)
+            text = result[0] if isinstance(result, (list, tuple)) else result
+            actions = result[1] if isinstance(result, (list, tuple)) and len(result) > 1 else []
+            return text, actions, {"usage": self._last_usage}
 
         def _call_llm_openai(self, messages, model):
             last = None
@@ -82,12 +98,12 @@ def _agent_cls():
                 except openai.APIError as e:
                     raise AdapterError(f"调用模型失败: {type(e).__name__}: {str(e)[:200]}") from e
                 else:
+                    self._last_usage = _extract_openai_usage(resp.usage)
                     msg = resp.choices[0].message
                     content = extract_message_field(msg, "content")
                     if (content or "").strip():
                         return merge_reasoning_content(
                             content, extract_message_field(msg, "reasoning_content"))
-                    # 思维链把预算花光，content 为空。同样的 max_tokens 重试还是空，翻倍。
                     last = f"模型返回空 content（max_tokens={budget}）"
                     budget = min(budget * 2, self._max_token_ceiling)
                 if attempt < self._retries:

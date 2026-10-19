@@ -11,12 +11,13 @@ APPS_JSON = CONFIGS / "apps.json"
 REGISTRY = CONFIGS / "sandbox_pool.json"
 TASKS_DATA = WORKSPACE / "tasks_data"
 RESULTS = WORKSPACE / "results"
+SESSIONS = WORKSPACE / "sessions"
 TASK_ARCHIVE = PROJECT_ROOT / "gym" / "bench" / "artifacts" / "cua_gym_tasks_v1.tar.zst"
 
 # 沙箱
 SANDBOX_TEMPLATE = "sdt-hojglb51"
 SANDBOX_TIMEOUT = 86400  # 24h
-POOL_MAX_SIZE = 12       # AGS 配额：50C / 4C每实例 = 12
+POOL_MAX_SIZE = int(os.environ.get("CUA_POOL_MAX_SIZE", 12))
 POOL_TAG = {"pool": "cua_gym"}
 
 # 任务脚本里硬编码的主机名，由沙箱 /etc/hosts 映射到开发机

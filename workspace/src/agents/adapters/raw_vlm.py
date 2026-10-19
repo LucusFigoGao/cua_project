@@ -55,6 +55,20 @@ class AgentError(Exception):
     pass
 
 
+def _extract_usage(usage) -> dict:
+    """从 OpenAI 兼容 API 的 usage 对象提取标准化 token 计数。"""
+    if not usage:
+        return {}
+    if isinstance(usage, dict):
+        return {k: usage[k] for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+                if k in usage}
+    return {
+        "prompt_tokens": getattr(usage, "prompt_tokens", None),
+        "completion_tokens": getattr(usage, "completion_tokens", None),
+        "total_tokens": getattr(usage, "total_tokens", None),
+    }
+
+
 class ScreenshotAgent:
     """screenshot 观测 + pyautogui 动作空间，走 OpenAI 兼容 chat 接口。"""
 
@@ -82,11 +96,13 @@ class ScreenshotAgent:
         self.observations: list[dict] = []
         self.thoughts: list[str] = []
         self.actions: list[list] = []
+        self._last_usage: dict = {}
 
     def reset(self, _logger=None, *args, **kwargs) -> None:
         self.observations.clear()
         self.thoughts.clear()
         self.actions.clear()
+        self._last_usage = {}
 
     def predict(self, instruction: str, obs: dict) -> tuple[str, list]:
         """
@@ -132,7 +148,7 @@ class ScreenshotAgent:
         actions = [_scale_relative_coords(a) if isinstance(a, str) else a
                    for a in actions]
         self.actions.append(actions)
-        return reply, actions
+        return reply, actions, {"usage": self._last_usage}
 
     def _call(self, messages: list) -> str:
         payload = {"model": self.model, "messages": messages,
@@ -148,6 +164,7 @@ class ScreenshotAgent:
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as r:
                     data = json.loads(r.read())
+                self._last_usage = _extract_usage(data.get("usage"))
                 msg = data["choices"][0]["message"]
                 content = (msg.get("content") or "").strip()
                 if content:

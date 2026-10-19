@@ -44,11 +44,63 @@ def _patch_single_action_prompt() -> None:
 
 
 def build(*, model: str, base_url: str, api_key: str, **kw):
+    import openai as _openai
     from mm_agents.qwen import QwenAgent
+    from mm_agents.qwen.client import extract_message_field, merge_reasoning_content
 
     _silence_debug_dump()
     _patch_single_action_prompt()
-    return QwenAgent(model=model, base_url=base_url, api_key=api_key, **kw)
+
+    retryable = (_openai.APIConnectionError, _openai.APITimeoutError,
+                 _openai.RateLimitError, _openai.InternalServerError)
+
+    class _PatchedQwenAgent(QwenAgent):
+        """覆写 call_llm 捕获 token usage。"""
+
+        def __init__(self, **init_kw):
+            super().__init__(**init_kw)
+            self._last_usage: dict = {}
+            self._oai_client = _openai.OpenAI(
+                base_url=init_kw.get("base_url") or base_url,
+                api_key=init_kw.get("api_key") or api_key,
+                timeout=180)
+
+        def call_llm(self, payload, model_name):
+            last = None
+            for attempt in range(1, 4):
+                try:
+                    resp = self._oai_client.chat.completions.create(
+                        model=model_name,
+                        messages=payload["messages"],
+                        max_tokens=payload.get("max_tokens", self.max_tokens),
+                        temperature=payload.get("temperature", self.temperature),
+                        top_p=payload.get("top_p", self.top_p),
+                    )
+                except retryable as e:
+                    last = e
+                    import time; time.sleep(min(5.0 * attempt, 30.0))
+                    continue
+                except _openai.APIError:
+                    raise
+                usage = resp.usage
+                self._last_usage = {
+                    "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                    "completion_tokens": getattr(usage, "completion_tokens", None),
+                    "total_tokens": getattr(usage, "total_tokens", None),
+                } if usage else {}
+                msg = resp.choices[0].message
+                content = extract_message_field(msg, "content")
+                reasoning = extract_message_field(msg, "reasoning_content")
+                return merge_reasoning_content(content, reasoning)
+            if last is not None:
+                raise last
+            return ""
+
+        def predict(self, instruction, obs):
+            text, actions = super().predict(instruction, obs)
+            return text, actions, {"usage": self._last_usage}
+
+    return _PatchedQwenAgent(model=model, base_url=base_url, api_key=api_key, **kw)
 
 
 register(AdapterSpec(
