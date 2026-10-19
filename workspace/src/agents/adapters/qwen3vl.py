@@ -47,6 +47,11 @@ def _agent_cls():
     retryable = (openai.APIConnectionError, openai.APITimeoutError,
                  openai.RateLimitError, openai.InternalServerError)
 
+    _SINGLE_ACTION_SUFFIX = (
+        "\n- IMPORTANT: Output exactly ONE <tool_call> block per response. "
+        "Never output multiple <tool_call> blocks in a single turn."
+    )
+
     class _PatchedQwen3VLAgent(Qwen3VLAgent):
         def __init__(self, *, base_url: str, api_key: str, timeout: float = 180,
                      retries: int = 3, max_token_ceiling: int = 32768, **kw):
@@ -57,8 +62,12 @@ def _agent_cls():
             self._max_token_ceiling = max_token_ceiling
 
         def call_llm(self, payload, model):
-            # 覆盖而不是 super()：上游的 @backoff 装饰在父类方法上，绕开它才能去掉外层重试。
-            return self._call_llm_openai(payload["messages"], model)
+            msgs = payload["messages"]
+            if msgs and msgs[0].get("role") == "system":
+                content = msgs[0].get("content", "")
+                if isinstance(content, str) and _SINGLE_ACTION_SUFFIX.strip() not in content:
+                    msgs[0]["content"] = content + _SINGLE_ACTION_SUFFIX
+            return self._call_llm_openai(msgs, model)
 
         def _call_llm_openai(self, messages, model):
             last = None

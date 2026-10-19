@@ -77,6 +77,7 @@ def main() -> int:
     print(f"sandbox : {cfg.sandbox_id}  apps_ready={cfg.apps_ready}  "
           f"app_host={cfg.app_host}")
 
+    ep = None
     try:
         remote = push.list_remote_tasks(sbx)
         cands = sorted(t for t in remote if t in local)
@@ -208,8 +209,12 @@ def main() -> int:
         return 0
 
     finally:
-        pool.release(cfg.sandbox_id)
-        print(f"\n已 release，实例保持 running（未 kill）")
+        if ep and ep.get("stop_reason") == "env_error":
+            pool.kill(cfg.sandbox_id)
+            print(f"\n实例 env_error，已 kill（不回池）")
+        else:
+            pool.release(cfg.sandbox_id)
+            print(f"\n已 release，实例保持 running（未 kill）")
 
 
 def _reward(sbx, task_id: str):

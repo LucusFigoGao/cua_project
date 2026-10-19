@@ -11,11 +11,12 @@ action_space="pyautogui" 组合。
 而 ichat 的真实路径是 {base}/chat/completions，带 /v1 一律 404；model="qwen*" 还会在
 agent.py:1028 走 dashscope SDK。两条路都堵，所以这里自己发请求。
 
-注意：OSWorld 这套提示词**不声明屏幕分辨率或坐标空间**，模型输出用哪种坐标约定
-不受控。要受控请用 qwen-cua adapter（它的 build_description_prompt 会明写）。
+坐标空间：告诉模型屏幕是 1000x1000，模型输出 0-999 相对坐标，adapter 把 pyautogui
+代码里的坐标换算成真实的 1920x1080 像素。与 qwen-cua / qwen3vl 的相对坐标机制一致。
 """
 import base64
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -24,6 +25,30 @@ from src.agents.registry import AdapterSpec, register  # 先导入它，osworld 
 
 from mm_agents.agent import parse_code_from_string          # noqa: E402
 from mm_agents.prompts import SYS_PROMPT_IN_SCREENSHOT_OUT_CODE  # noqa: E402
+
+_SCREEN_W, _SCREEN_H = 1920, 1080
+
+_COORD_FUNCS = (
+    "click", "moveTo", "moveRel", "dragTo", "dragRel",
+    "doubleClick", "rightClick", "tripleClick", "middleClick",
+)
+_COORD_RE = re.compile(
+    r"(pyautogui\.(?:" + "|".join(_COORD_FUNCS) + r")\s*\()"
+    r"\s*(?:x\s*=\s*)?(\d+(?:\.\d+)?)"
+    r"\s*,\s*(?:y\s*=\s*)?(\d+(?:\.\d+)?)"
+    r"(.*)",
+)
+
+
+def _scale_relative_coords(code: str,
+                           w: int = _SCREEN_W, h: int = _SCREEN_H) -> str:
+    """把 pyautogui 代码里的 0-999 相对坐标换算成实际像素。"""
+    def _sub(m):
+        prefix = m.group(1)
+        x = int(float(m.group(2)) / 999 * w)
+        y = int(float(m.group(3)) / 999 * h)
+        return f"{prefix}{x}, {y}{m.group(4)}"
+    return _COORD_RE.sub(_sub, code)
 
 
 class AgentError(Exception):
@@ -49,7 +74,11 @@ class ScreenshotAgent:
         self.timeout = timeout
         self.retries = retries
         self.system_message = SYS_PROMPT_IN_SCREENSHOT_OUT_CODE.format(
-            CLIENT_PASSWORD=client_password)
+            CLIENT_PASSWORD=client_password) + (
+            "\nThe screen's resolution is 1000x1000."
+            "\nIMPORTANT: Return exactly ONE action per step. "
+            "Do not output multiple code blocks or multiple actions in a single response."
+        )
         self.observations: list[dict] = []
         self.thoughts: list[str] = []
         self.actions: list[list] = []
@@ -100,6 +129,8 @@ class ScreenshotAgent:
             actions = parse_code_from_string(reply)
         except Exception as e:
             raise AgentError(f"解析模型回复失败: {e}\n原始回复: {reply[:300]}") from e
+        actions = [_scale_relative_coords(a) if isinstance(a, str) else a
+                   for a in actions]
         self.actions.append(actions)
         return reply, actions
 
@@ -144,7 +175,7 @@ register(AdapterSpec(
     default_model="qwen3.8-max",
     channel="openai",
     obs_keys=("screenshot",),
-    coordinate_space="unknown",
+    coordinate_space="relative",
     defaults={"temperature": 0.0, "max_tokens": 16384},
-    notes="OSWorld 原始提示词，不声明坐标空间，模型可能混用 relative/absolute",
+    notes="OSWorld 提示词 + 1000x1000 相对坐标（adapter 做反变换到 1920x1080）",
 ))

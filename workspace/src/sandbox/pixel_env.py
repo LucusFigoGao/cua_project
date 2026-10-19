@@ -191,16 +191,19 @@ class PixelSandboxEnv:
           - 字符串           -> 当 pyautogui 代码执行
           - {"command": ...} -> 取 command 执行
           - WAIT/FAIL/DONE   -> 不产生动作
-        返回 {"screenshot": bytes}。
+        返回 {"screenshot": bytes, "_exec": dict}。
+        _exec 是 /execute 端点的原始返回（status/output/error/returncode），
+        special 动作和 computer_13 动作返回空 dict。
         """
         special = ("WAIT", "FAIL", "DONE")
+        exec_result: dict = {}
         if action in special or (isinstance(action, dict)
                                  and action.get("action_type") in special):
             pass
         elif isinstance(action, str):
-            self.execute_python_command(action)
+            exec_result = self.execute_python_command(action)
         elif isinstance(action, dict) and "command" in action:
-            self.execute_python_command(action["command"])
+            exec_result = self.execute_python_command(action["command"])
         elif isinstance(action, dict):
             self.execute_action(action)
         else:
@@ -208,7 +211,9 @@ class PixelSandboxEnv:
 
         if pause:
             self.sleep(pause)
-        return self.get_obs()
+        obs = self.get_obs()
+        obs["_exec"] = exec_result
+        return obs
 
     def sleep(self, seconds: float) -> None:
         """等待。直接用 envd 的 sleep，不绕 server 起一个 python 子进程。"""

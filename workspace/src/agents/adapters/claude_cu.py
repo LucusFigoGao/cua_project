@@ -67,6 +67,9 @@ def build(*, model: str, base_url: str, api_key: str, **kw):
     os.environ["ANTHROPIC_BASE_URL"] = base_url
     from mm_agents.anthropic.main import AnthropicAgent
 
+    kw.setdefault("system_prompt_suffix",
+                  "\nIMPORTANT: Output exactly ONE tool call per response. "
+                  "Do not chain or batch multiple actions in a single turn.")
     return ClaudeAdapter(AnthropicAgent(model=model, api_key=api_key, **kw))
 
 

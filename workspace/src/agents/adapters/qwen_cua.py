@@ -24,10 +24,30 @@ def _silence_debug_dump() -> None:
     qwen_main.dump_debug_messages = lambda *a, **kw: None
 
 
+def _patch_single_action_prompt() -> None:
+    """在 Rules 区追加单动作约束。只 patch 一次。"""
+    from mm_agents.qwen import prompts as qwen_prompts
+    marker = "Output exactly ONE <tool_call>"
+    fn = qwen_prompts.build_internal_system_prompt
+    if marker in (fn.__doc__ or ""):
+        return
+    _orig = fn
+
+    def _patched(*a, **kw):
+        text = _orig(*a, **kw)
+        return text + (
+            "\n- IMPORTANT: Output exactly ONE <tool_call> block per response. "
+            "Never output multiple <tool_call> blocks in a single turn."
+        )
+    _patched.__doc__ = (fn.__doc__ or "") + marker
+    qwen_prompts.build_internal_system_prompt = _patched
+
+
 def build(*, model: str, base_url: str, api_key: str, **kw):
     from mm_agents.qwen import QwenAgent
 
     _silence_debug_dump()
+    _patch_single_action_prompt()
     return QwenAgent(model=model, base_url=base_url, api_key=api_key, **kw)
 
 

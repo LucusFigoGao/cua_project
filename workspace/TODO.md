@@ -159,3 +159,43 @@ and do nothing"。显式标注 NO-OP 的只有 1 个，但「基线非零」范�
 
 开发机磁盘（build 产物）会先于内存成为瓶颈（31 个 app 的 vite preview 合计才 1.68GB，
 磁盘 70GB）。届时考虑按需拉起或反向代理分发。
+
+## 9. mock app 迁到独立 CVM
+
+31 个 mock app 部署到一台固定的 CVM，当前开发机只负责编排（pool / agent / run_task）。
+
+```
+┌─ App CVM（固定）──────┐     ┌─ 编排机（当前开发机）─┐       ┌─ AGS 沙箱 ×N ─────────────┐
+│ 31 个 vite preview     │     │ pool / agent / run_task│─envd─→│ OSWorld server + chromium │
+│ :8000-8030             │←────┼──────── HTTP ──────────┼───────│ hosts: <CVM IP> h.d.i     │
+└────────────────────────┘ 探活└────────────────────────┘       └───────────────────────────┘
+```
+
+### 9.1 网络连通性验证（先于代码改动）
+
+- 沙箱 → CVM：先测同地域私网 IP；不通再用 CVM 公网 IP。
+- 编排机 → CVM：8000-8030 可达，用于探活。
+- 走公网时，安全组只对沙箱出口 IP 放行 8000-8030（沙箱内 `curl ifconfig.me` 取出口 IP，
+  并确认是否固定）。
+
+### 9.2 代码
+
+- app 主机地址改为显式配置（`CUA_APP_HOST` 或 `settings`），未配置直接报错；
+  去掉 `apps_host.detect_host_ip()` 取本机 IP 的默认行为。
+- `run_task.py` / `manage_pool.py` 的 app 探活从 `127.0.0.1` 改为探测 CVM 地址。
+- `apps_host.py` 按运行位置拆分：clone / build / tmux 启停留给 CVM 上的 `serve_apps.py`；
+  编排机侧只保留远程探活函数。拆分后挪出 `src/sandbox/`（如 `src/host/`）。
+- `deploy.load_app_ports()` 与 `apps_host.load_app_ports()` 合并为一份。
+- `deploy.py` 写 hosts、vite `allowedHosts` 补丁保持不变，IP 换成 CVM 的。
+
+### 9.3 CVM 部署
+
+- 装 node 22 / npm / tmux / git，放一份本仓库（`serve_apps` 依赖 `configs/apps.json` 与 `apps_host`）。
+- 磁盘按 build 产物数 GB 并为扩展网页留余量。
+- 开机自动拉起 31 个 app（systemd 或 crontab `@reboot`）。
+
+### 9.4 文档
+
+- README 第 1 节架构图改为三角色，「单点」由开发机改为 App CVM。
+- README 第 5 节出向连通性实测数据在新环境重测后更新。
+- 第 5 项 `test_apps_host.py` 的验证对象由开发机改为 CVM。

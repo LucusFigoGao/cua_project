@@ -129,6 +129,10 @@ def build(*, model: str, base_url: str, api_key: str, **kw):
     # 错误，它会一直重试到墙上时间耗尽——表现为"卡住"而不是报错，批跑时致命。
     # 第 574 行是运行时读模块全局，所以改属性即可，osworld/ 下的文件不动。
     ga.API_RETRY_TIMES = retries
+    ga.GEMINI_DI = ga.GEMINI_DI + (
+        "\n* IMPORTANT: Output exactly ONE function call per response. "
+        "Do not combine multiple actions in a single turn."
+    )
     GeminiFCAgent = ga.GeminiFCAgent
 
     client = genai.Client(api_key=api_key, http_options={"base_url": base_url})
