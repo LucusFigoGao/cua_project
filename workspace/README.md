@@ -39,7 +39,6 @@
 ```
 workspace/
 ├── README.md / TODO.md
-├── env.sh                     设 PYTHONPATH + 加载 ~/.bashrc
 ├── configs/
 │   ├── apps.json              31 个 app → 固定端口（事实来源）
 │   └── sandbox_pool.json      池 registry（运行期状态，gitignore）
@@ -51,8 +50,9 @@ workspace/
     │   ├── serve_apps.py      【开发机】起/停/查 31 个 app
     │   ├── manage_pool.py     池运维：预热 / 查看 / 回收 busy / 销毁
     │   ├── unpack_tasks.py    【一次性】归档 → tasks_data/
-    │   ├── push_tasks.py      选任务打 tar 推实例
-    │   └── run_task.py        单任务闭环：setup → agent → reward
+    │   ├── push_tasks.py      选任务打 tar 推实例（调试用，批跑不需要）
+    │   ├── run_task.py        单任务闭环：setup → agent → reward
+    │   └── batch_run.py       批量跑任务：多 worker 并发
     ├── sandbox/
     │   ├── apps_host.py       开发机侧：clone / build / tmux 起 app / 探活 / 探测 IP
     │   ├── deploy.py          沙箱侧：写 hosts 映射 + 探活
@@ -62,21 +62,23 @@ workspace/
     ├── tasks/
     │   ├── urlmap.py          占位符替换表（从 apps.json 推导）
     │   ├── catalog.py         读 tasks_data/，筛选 + 分层取样
-    │   └── push.py            tar 上传 + google-chrome shim
+    │   └── push.py            tar 上传 + google-chrome shim + 单任务推送
     ├── agents/
     │   ├── registry.py        统一接口 + 注册表 + 装载校验
     │   └── adapters/          每个 agent 一个 adapter：qwen_cua / qwen3vl / claude_cu / gemini_cu / raw_vlm
     ├── runner/
-    │   └── episode.py         episode 循环：观测 → predict → 执行，直到 DONE/FAIL/步数用完
+    │   ├── episode.py         episode 循环：观测 → predict → 执行，直到 DONE/FAIL/步数用完
+    │   ├── task.py            run_one()：单任务完整生命周期
+    │   └── batch_runner.py    多线程批跑引擎
     └── smoke_test/
         ├── test_pool.py               池的获取/归还/校准
         ├── test_task_from_archive.py  任务解包→推送→setup→reward
         └── test_osworld_server.py     观测 + 坐标动作（11/11）
 ```
 
-所有模块用绝对导入（`from src.xxx import` / `from mm_agents.xxx import`），
-路径由 `env.sh` 的 `PYTHONPATH` 提供。唯一例外是 `src/agents/registry.py` 会把 `osworld/`
-补进 `sys.path`，保证不经 `env.sh` 直接 import adapter 时也能找到 `mm_agents`。
+所有模块用绝对导入（`from src.xxx import` / `from mm_agents.xxx import`）。
+`python -m` 从 `workspace/` 目录执行时自动把 cwd 加入 `sys.path`，`src/agents/registry.py`
+会把 `osworld/` 补进 `sys.path`，无需额外设置 `PYTHONPATH`。
 
 ---
 
@@ -84,13 +86,10 @@ workspace/
 
 ```bash
 cd workspace
-source env.sh                  # PYTHONPATH + ICHAT_API_KEY / ICHAT_BASE_URL
 ```
 
-`env.sh` 必须先 source：它把 `cua_project/` 和 `osworld/` 放进 `PYTHONPATH`
-（`osworld/` 自己也要在路径上，因为 `mm_agents/agent.py` 内部是 `from mm_agents...` 导入的），
-并加载 `~/.bashrc` 里的 `ICHAT_API_KEY` / `ICHAT_BASE_URL`（跑 agent 必需，
-非交互 shell 不会自动加载）。
+确保环境变量 `ICHAT_API_KEY` / `ICHAT_BASE_URL` / `E2B_API_KEY` 已在 shell 环境中
+（通常写在 `~/.bashrc`，登录 shell 自动加载）。
 
 ```bash
 # ── 一次性准备 ──────────────────────────────────────────────
@@ -117,6 +116,12 @@ python -m src.cli.run_task --list-agents                     # 列出已注册�
 python -m src.cli.run_task --task <id> --agent qwen-cua --max-steps 10
 python -m src.cli.run_task --task <id> --agent raw-vlm --model gemini-3.5-flash
 
+# ── 批跑 ────────────────────────────────────────────────────
+python -m src.cli.batch_run --agent qwen-cua --workers 4 --sample-per-app 3 --exclude-app monday_mock
+python -m src.cli.batch_run --dry-run --sample-per-app 1     # 只看任务列表
+python -m src.cli.batch_run --resume                         # 跳过已有 result.json 的任务
+python -m src.cli.batch_run --keep-instances                 # 跑完不 kill 沙箱（默认会清理）
+
 # ── 验证 ────────────────────────────────────────────────────
 python -m src.smoke_test.test_osworld_server      # 观测+动作（11/11）
 python -m src.smoke_test.test_task_from_archive   # 任务链路
@@ -124,8 +129,8 @@ python -m src.smoke_test.test_pool                # 池的获取/归还/校准
 ```
 
 所有脚本假定 app 已在开发机上跑着；没跑的话 `manage_pool.py` / `run_task.py` 直接提示去执行
-`serve_apps.py --start`，不会白白建实例。**所有脚本都不 kill 实例**，跑完
-`release()` 回到 idle 继续复用。`unpack_tasks.py` 和 `push_tasks.py` 幂等。
+`serve_apps.py --start`，不会白白建实例。`batch_run` 默认在跑完后 kill 所有 idle 实例
+（`--keep-instances` 可跳过）；`run_task` 跑完 release 回 idle 继续复用。
 
 ---
 
@@ -138,6 +143,7 @@ python -m src.smoke_test.test_pool                # 池的获取/归还/校准
 class PoolInstanceConfig:
     sandbox_id: str; template: str; created_at: str
     status: str                      # "idle" | "busy"
+    busy_since: Optional[str]        # ISO 时间戳，reconcile 回收超时 30 分钟的
     app_type: Optional[str] = None
     app_host: Optional[str] = None   # app 实际跑在哪
     apps_ready: bool = False         # hosts 映射已配好且探活通过
@@ -231,7 +237,7 @@ reconcile 回来的，都要重配；hosts 写入幂等，成本可忽略。app 
 | `qwen3vl` | `mm_agents.qwen3vl_agent.Qwen3VLAgent` | openai | relative | 替换 HTTP 层：直传 base_url、合并 `reasoning_content`、补 temperature、失败抛错、去掉 30s×5 外层重试 |
 | `claude-cu` | `mm_agents.anthropic.AnthropicAgent` | anthropic | absolute | 经 `ANTHROPIC_BASE_URL` 注入；tool_use dict 摊平成 pyautogui 串 |
 | `gemini-cu` | `mm_agents.gemini_agent.GeminiFCAgent` | google_genai | relative | function call 翻成 pyautogui、0-999 换算像素；重试 500→4 |
-| `raw-vlm` | 自写 `ScreenshotAgent`（提示词与解析从 `mm_agents` import） | openai | 未声明 | 自发请求，因为 `PromptAgent` 只认 `gpt*` 走 OpenAI 且 URL 带 `/v1`（ichat 404） |
+| `raw-vlm` | 自写 `ScreenshotAgent`（提示词与解析从 `mm_agents` import） | openai | relative | 提示词 1000x1000 + adapter 反变换到 1920x1080 |
 
 `qwen-cua` 与 `qwen3vl` 是同一家两代 scaffold，tool_call 格式不同（XML vs JSON），不能共用一个 adapter。
 
@@ -289,7 +295,7 @@ qwen3.x 会先输出思维链（`reasoning_content`）再给 `content`，`max_to
 | 变量 | 用途 |
 |---|---|
 | `E2B_API_KEY` / `E2B_DOMAIN` | AGS 沙箱 |
-| `ICHAT_API_KEY` / `ICHAT_BASE_URL` | 模型 API，定义在 `~/.bashrc`，由 `env.sh` 加载 |
+| `ICHAT_API_KEY` / `ICHAT_BASE_URL` | 模型 API，写在 `~/.bashrc` 中 |
 | `CUA_APP_HOST` | 覆盖自动探测的开发机 IP（可选） |
 
 ---

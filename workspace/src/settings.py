@@ -52,7 +52,7 @@ ICHAT_CHANNELS = {
 
 
 def ichat_key() -> str:
-    """ICHAT_API_KEY。定义在 ~/.bashrc，非交互 shell 不会自动加载。"""
+    """ICHAT_API_KEY。"""
     return os.environ.get("ICHAT_API_KEY", "")
 
 # AGS 域名不走代理

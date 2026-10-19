@@ -3,8 +3,8 @@
 批量跑任务：多 worker 并发消费任务队列。
 
 Usage:
-    bash -lc 'source ~/.bashrc && python -m src.cli.batch_run --agent qwen-cua --workers 4 --sample-per-app 3'
-    bash -lc 'source ~/.bashrc && python -m src.cli.batch_run --agent qwen-cua --workers 2 --dry-run'
+    cd workspace && python -m src.cli.batch_run --agent qwen-cua --workers 4 --sample-per-app 3
+    cd workspace && python -m src.cli.batch_run --agent qwen-cua --workers 2 --dry-run
 """
 import argparse
 import json
@@ -43,7 +43,8 @@ def main() -> int:
                     help="跳过 results/ 下已有 result.json 的任务")
     ap.add_argument("--dry-run", action="store_true",
                     help="只打印任务列表不执行")
-    ap.add_argument("-v", "--verbose", action="store_true", default=True)
+    ap.add_argument("--keep-instances", action="store_true",
+                    help="批跑结束后保留沙箱实例（默认 kill 所有 idle 实例）")
     ap.add_argument("-q", "--quiet", action="store_true")
     args = ap.parse_args()
 
@@ -139,6 +140,14 @@ def main() -> int:
         print(f"  {app:24s}  {info['ok']}/{info['count']}  "
               f"avg_delta={info['avg_delta']}  avg_steps={info['avg_steps']}")
     print(f"\n  汇总: {summary_path}")
+
+    # 清理沙箱实例
+    if not args.keep_instances:
+        idle = pool.idle_ids()
+        if idle:
+            print(f"\n清理 {len(idle)} 个 idle 沙箱实例...")
+            pool.kill_all()
+            print("  已全部 kill")
     return 0
 
 

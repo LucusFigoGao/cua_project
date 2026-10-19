@@ -50,79 +50,84 @@ FunctionDeclaration。要用它得把翻译表改成 Google 预定义函数名�
 - `parse_miss` 检测只认 `<tool_call>` 和 ``` 两种标记（`src/runner/episode.py`）。
   `qwen/actions.py:317` 在解析不出任何 tool_call 时 fallback 成 `DONE`，解析失败
   长得跟任务完成一样。接新 agent 时这个判据要跟着扩。
-- **实例会卡在 busy**：进程被 `timeout`/Ctrl-C 杀掉时 `finally` 里的 `release`
-  跑不到，该实例永久 busy，下次 `acquire` 会新建一个。`reconcile()` 应该回收
-  超时未心跳的 busy 实例。批跑前必须修，否则会把配额耗光。
-  目前的人工兜底：`python -m src.cli.manage_pool --release-all`（无跨进程锁，确认没有任务在跑再用）。
+  **首轮批跑已触发 3 次 parse_miss**（google_docs / pinterest / salesforce），
+  其中 google_docs 的 parse_miss 导致 delta=0，任务实际没做就结束了。
 
-## 2. episode 健壮性（M4 前置）
+## 2. episode 健壮性（已落地）
 
-### 2.1 执行与观测解耦
+已实现：
 
-harness 没有「每步只发一个动作」的硬约束，各 agent 一步都可能产出多条动作：
+- **环境异常兜底**：`env.step()` / `env.get_obs()` 异常在 `run_episode` 内捕获，
+  `stop_reason="env_error"`，保留已跑步数 + error 信息，`result.json` 正常写入。
+- **坏实例不回池**：`env_error` 时 `pool.kill()` 而不是 `release()`。
+- **动作执行结果记录**：`pixel_env.step()` 返回 `_exec` 字段（`/execute` 端点原始
+  `{status, output, error, returncode}`），记入 trajectory 的 `exec_result`。
+- **单动作约束**：5 个 adapter 全部在提示词中约束每步只出一个动作（不改 osworld/ 原始文件），
+  runner 层做截断兜底。去掉了 `episode.py:103` 的冗余 `get_obs()`。
+- **final.png**：循环结束后额外截一张 `screenshots/final.png`，对照 reward 用。
+- **busy-stuck 回收**：`PoolInstanceConfig` 加 `busy_since` 时间戳，`reconcile()` 自动
+  回收超时 30 分钟的 busy 实例。
 
-| agent | 提示词约束 | 一步产出多条的来源 |
+**首轮批跑验证**：27 个任务 env_error = 0，环境全程稳定。
+
+### 留到后续再定
+
+哪些异常值得原地重试、重试几次、超时阈值多少、整任务重跑上限。
+首轮数据显示环境侧稳定，暂不需要重试机制。
+
+## 3. 坐标约定标定（已落地）
+
+统一使用 **relative（0-999）** 坐标空间。各 adapter 状态：
+
+| adapter | coordinate_space | 机制 |
 |---|---|---|
-| `raw-vlm` | 明确允许多行（`prompts.py:7` "one line or multiple lines"） | 多个代码块 / `;` 拆分 |
-| `qwen-cua` / `qwen3vl` | 软约束 "A single <tool_call>"，但解析器照单全收多个 | 带修饰键的点击 → keyDown/click/keyUp；多行 type → typewrite + enter |
-| `claude-cu` | 原生允许一条回复多个 tool_use | 多个 tool_use block |
-| `gemini-cu` | 无 | 多个 function call；type+press_enter、drag 各拆两条 |
+| qwen-cua | relative | 提示词 1000x1000 + `adjust_coordinates()` 反变换 |
+| qwen3vl | relative | 同上 |
+| gemini-cu | relative | schema 0-999 + adapter `_xy()` 反变换 |
+| raw-vlm | relative | 提示词 1000x1000 + adapter `_scale_relative_coords()` 反变换 |
+| claude-cu | absolute | Anthropic 原生 `computer_20241022` 工具自带缩放，不走 0-999 体系 |
 
-**不在 harness 层强制单动作**：那会改变模型相对官方 baseline 的行为，测到的就不是同一个东西。
-要修的是观测侧：`env.step()` 每条动作后都截一张图，而 `episode.py:103` 又重新截一次，
-k 条动作截 k+1 张，只用最后一张。改为 runner 循环里只执行不观测，每步结束统一 `get_obs()` 一次。
+## 4. M4 批量调度（已落地）
 
-顺带：最后一步动作后的画面不落盘（`stepNN.png` 都是动作前的），补一张 `final.png`，对照 reward 用。
+```
+src/runner/task.py           run_one()：单任务完整生命周期，自动 acquire/push/episode/reward/release
+src/runner/batch_runner.py   BatchRunner：多线程批跑引擎
+src/cli/batch_run.py         CLI 入口
+src/tasks/push.py            push_single_task()：轻量单任务推送（~30KB，~100ms）
+```
 
-### 2.2 环境侧异常
+用法：
+```bash
+cd workspace && python -m src.cli.batch_run \
+    --agent qwen-cua --workers 4 --sample-per-app 3 \
+    --exclude-app monday_mock --resume
+```
 
-现状：agent 异常有兜底（保留已跑的步、记 `agent_error`），环境异常没有——`env.step()` 抛错直接
-冲出 `run_episode`，轨迹丢失、`result.json` 不写，`finally` 里还把这个可能已坏的实例 `release`
-回 idle，下一个任务接着用。
+**任务与实例已解绑**：`run_one()` 在 setup 前只推当前任务的 3 个文件，不需要提前 push_tasks。
+`cli/push_tasks.py` 降为调试工具。
 
-**先布局骨架，策略留给数据**。现在就要定的是那些不定下来、批跑结果就不可信的东西：
+### 首轮批跑结果（qwen-cua / qwen3.8-max / max_steps=50）
 
-1. **归因**：`stop_reason` 增加 `env_error`；环境挂掉的任务不计入模型成功率，要么重跑要么单列。
-   否则沙箱抖一次就记成模型做错一题。
-2. **轨迹不丢**：`env.step()` 的异常与 agent 异常一样在 `run_episode` 内捕获，保留前 N 步再返回。
-3. **坏实例不回池**：环境异常时实例 `kill` 而不是 `release`（或至少标记、下次 acquire 前做体检）。
-4. **动作执行结果不再丢弃**：OSWorld server `/execute` 返回 `status/output/error/returncode`
-   （`desktop_env/server/main.py:107`），`step()` 现在全部扔掉。模型生成的代码语法错、
-   `pyautogui` 报错都静默变成「执行了 1 个动作」。记进 trajectory 的每条动作里。
-   这条要先区分：returncode≠0 多半是**模型**的错（代码写坏了），不是环境错，不该触发 2/3。
+27 个 app 各 1 个任务，排除 monday_mock 等 4 个，总耗时 78 分钟。
 
-可预见的环境故障面（来自代码，未实测频率）：envd 连接断/沙箱被回收（e2b 异常）、
-`curl` 到 server 超时（`_post_json` 返回空 → 静默 `{}`）、server 崩溃（`/screenshot` 非 200 →
-`PixelEnvError`）、24h 到期、开发机 app 不可达（setup 写不出 sid）。
+| 指标 | 值 |
+|---|---|
+| env_error | 0 |
+| 平均 reward_delta | 0.406 |
+| delta > 0（有进展） | 17/27 = 63% |
+| delta = 1.0（满分） | 5 个：facebook, github, jira, postman, shopify_admin |
+| delta = 0（没做对） | 9 个 |
+| stop=done（主动结束） | 11 |
+| stop=max_steps（跑满 50 步） | 13 |
+| stop=parse_miss | 3（google_docs, pinterest, salesforce） |
 
-**留到 rollout 再定**：哪些异常值得原地重试、重试几次、超时阈值多少、整任务重跑上限。
-这些依赖真实故障频率，先拍脑袋只会定错。第一轮批跑按上面 1-4 把异常分类落盘，看分布再定。
+**发现的问题**：
 
-## 3. 坐标约定标定
-
-`coordinate_type` 取 relative（0-999）还是 absolute，需实测确认，不能照搬默认值。
-**由本人确认**。
-
-注意 OSWorld 的 `SYS_PROMPT_IN_SCREENSHOT_OUT_CODE` 全文不声明屏幕分辨率或坐标空间，
-而 qwen scaffold 的 `build_description_prompt()` 会明写（relative 时给
-`The screen's resolution is 1000x1000`）—— 换 agent 时这项会跟着变。
-
-## 4. M4 批量调度
-
-`src/runner/batch_runner.py`：N 个 worker 线程消费任务队列。
-每个 worker 拿实例是秒级的，批跑启动开销基本消失。并发上限 12 个实例（配额所限）。
-
-依赖第 1、2 项先落地，否则每接一个模型都要重做一遍日志与计量。
-
-同时要做的两件结构调整：
-
-- **任务与实例解绑**：现在任务要先 `push_tasks` 到某个实例，`run_task` 要求任务已在拿到的
-  实例上（`run_task.py:98`）。多实例时 acquire 拿到的不一定是推过的那台；实例被替换后是空的；
-  本地重解包后实例上的副本静默过期。改为 `run_task` 在 setup 前只推当前任务的 3 个文件
-  （几十 KB，~100ms）。`google-chrome` shim 与 `requests` 是实例级准备，挪进 `pool.acquire`
-  的就绪检查。`cli/push_tasks.py` 之后降为调试工具。
-- **单任务生命周期抽出**：`run_task.main()` 里 setup → 基线 → episode → 终值 → 落盘这段
-  抽成 `src/runner/task.py::run_one(sbx, spec, agent)`，cli 与 batch_runner 共用。
+- **twitter_mock reward=None**：`reward.py` 输出格式不在已识别的两种模式
+  （`REWARD: 0.5` / `Score: .../... = 0.5`）内，需要补第三种解析模式。
+- **基线非零已确认 2 个**：pinterest（1.0，NO-OP）、gitlab（0.2）。
+  `reward_delta` 作为主指标是对的。
+- **13/27 跑满 50 步**：模型没有在合理步数内完成。要看是任务难还是模型在循环。
 
 ## 5. 补 `src/smoke_test/test_apps_host.py`
 
@@ -150,10 +155,11 @@ and do nothing"。显式标注 NO-OP 的只有 1 个，但「基线非零」范�
 部分 `reward.py` 含反向检查项（「不该动的东西没被动过」），什么都不做反而先得分。
 
 所以该记的指标是 **`final_reward - baseline_reward`**，不是 `final_reward`。
-两个字段 `result.json` 都已存，目前没人用这个差值。
+两个字段 `result.json` 都已存，批跑汇总用 `reward_delta`。
 
-建议在批跑前做一次基线扫描：只跑 `initial_setup.py` + `reward.py`，不调模型，
-记下每个任务的基线分。不花 token，结果直接决定测试集怎么选。
+**首轮批跑已确认基线非零 2 个**：pinterest(1.0)、gitlab(0.2)。
+全量基线扫描（只跑 initial_setup + reward，不调模型）仍建议做一次，
+用于确认测试集里有多少 NO-OP 任务和反向检查项。
 
 ## 8. 扩展到几百上千个网页
 

@@ -9,11 +9,9 @@
 reward.py 从那里读，两者必须同机；launch_gui 也要在沙箱的 chromium 里开页面。
 它们访问的 app 跑在开发机上。
 
-ICHAT_API_KEY / ICHAT_BASE_URL 定义在 ~/.bashrc，非交互 shell 不会自动加载。
-
 Usage:
-    bash -lc 'source ~/.bashrc && python -m src.cli.run_task --list'
-    bash -lc 'source ~/.bashrc && python -m src.cli.run_task --task <id> --max-steps 15'
+    cd workspace && python -m src.cli.run_task --list
+    cd workspace && python -m src.cli.run_task --task <id> --max-steps 15
 """
 import argparse
 import json
