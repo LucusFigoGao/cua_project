@@ -22,12 +22,12 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from src.settings import app_ports
+from src.settings import app_ports, CUA_HUB_DIR
 
 REPO_URL = "https://github.com/xlang-ai/CUA-Gym-Hub"
 # 不放 /tmp（可能被系统清理，build 产物重建要几分钟），也不放 workspace/
 # （build 产物有数 GB，不该和代码混在一起）。
-REPO_DIR = Path(os.environ.get("CUA_HUB_DIR", "/data/workspace/cua_hub"))
+REPO_DIR = Path(os.environ.get("CUA_HUB_DIR", CUA_HUB_DIR))
 TMUX_SESSION = "cua-gym-apps"
 #: 早期版本用过的会话名。stop_all 一并清理，否则它们继续占着 8000-8030，
 #: 新起的 vite 会顺延到 8031+，而探活看到的其实是老进程。
