@@ -1,7 +1,9 @@
 """
-单任务生命周期：acquire → push → setup → episode → reward → save → release/kill。
+单任务生命周期：acquire → deploy_apps → push → setup → episode → reward → save → kill/release。
 
 run_one() 是 cli/run_task.py（单跑）和 runner/batch_runner.py（批跑）的共用核心。
+kill_after=True（默认）：任务结束后无论成功/失败都 kill 沙箱（kill-per-task 模式）。
+kill_after=False：保持旧的复用逻辑（env_error kill，其余 release）。
 """
 import json
 import logging
@@ -16,6 +18,7 @@ from e2b import Sandbox
 from src.agents import registry
 from src.runner.episode import run_episode
 from src.sandbox import osworld_server as osw
+from src.sandbox.app_deploy import deploy_task_apps
 from src.sandbox.pixel_env import PixelSandboxEnv
 from src.sandbox.pool import SandboxPool
 from src.settings import RESULTS, SESSIONS
@@ -29,14 +32,16 @@ def run_one(pool: SandboxPool, spec: TaskSpec, agent_name: str, *,
             model: Optional[str] = None, max_steps: int = 10,
             pause: float = 1.0, max_tokens: Optional[int] = None,
             run_dir: Optional[Path] = None, session_dir: Optional[Path] = None,
-            verbose: bool = True) -> dict:
+            kill_after: bool = True, verbose: bool = True) -> dict:
     """
     端到端跑一个任务，返回 result dict（同时写入 result.json 和 session JSONL）。
 
     run_dir:     result.json 和 screenshots 的输出目录，默认 RESULTS/<task_id>
     session_dir: session JSONL 的输出目录，默认 SESSIONS/<task_id>.jsonl
+    kill_after:  True = 任务结束后 kill 沙箱（kill-per-task 模式，默认）
+                 False = 旧复用逻辑（env_error kill，其余 release）
     """
-    cfg, sbx = pool.acquire()
+    cfg, sbx = pool.acquire(ensure_apps=False)
     stop_reason = None
     try:
         result = _run_on_sandbox(
@@ -61,7 +66,11 @@ def run_one(pool: SandboxPool, spec: TaskSpec, agent_name: str, *,
             "trajectory": [],
         }
     finally:
-        if stop_reason == "env_error":
+        if kill_after:
+            pool.kill(cfg.sandbox_id)
+            if verbose:
+                log.info("实例 %s 任务结束，已 kill", cfg.sandbox_id)
+        elif stop_reason == "env_error":
             pool.kill(cfg.sandbox_id)
             if verbose:
                 log.info("实例 %s env_error，已 kill", cfg.sandbox_id)
@@ -77,6 +86,8 @@ def _run_on_sandbox(pool, cfg, sbx, spec, agent_name, *,
     push.ensure_sandbox_deps(sbx)
     if spec.path:
         push.push_single_task(sbx, task_id, spec.path)
+
+    deploy_task_apps(sbx, spec)
 
     osw.ensure_server(sbx)
     env = PixelSandboxEnv(sbx, install=False)
