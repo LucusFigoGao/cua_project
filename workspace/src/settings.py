@@ -12,6 +12,7 @@ REGISTRY = CONFIGS / "sandbox_pool.json"
 TASKS_DATA = WORKSPACE / "tasks_data"
 RESULTS = WORKSPACE / "results"
 SESSIONS = WORKSPACE / "sessions"
+CUA_HUB_DIR = PROJECT_ROOT / "gym" / "hub"
 TASK_ARCHIVE = PROJECT_ROOT / "gym" / "bench" / "artifacts" / "cua_gym_tasks_v1.tar.zst"
 
 # 沙箱
