@@ -54,6 +54,7 @@ workspace/tasks_data/*
 # 评估产出：轨迹 json + 逐步截图，由 run_task.py 生成，可重跑复现，不进版本库
 workspace/results/
 workspace/sessions
+workspace/app_bundles/
 
 .cache
 
