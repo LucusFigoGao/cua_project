@@ -14,6 +14,7 @@ RESULTS = WORKSPACE / "results"
 SESSIONS = WORKSPACE / "sessions"
 CUA_HUB_DIR = PROJECT_ROOT / "gym" / "hub"
 TASK_ARCHIVE = PROJECT_ROOT / "gym" / "bench" / "artifacts" / "cua_gym_tasks_v1.tar.zst"
+APP_BUNDLES = WORKSPACE / "app_bundles"
 
 # 沙箱
 SANDBOX_TEMPLATE = "sdt-hojglb51"
@@ -71,3 +72,8 @@ def app_ports() -> dict[str, int]:
         data = json.loads(APPS_JSON.read_text())
         _PORTS_CACHE = {a["app"]: a["port"] for a in data["apps"]}
     return dict(_PORTS_CACHE)
+
+
+def port_to_app() -> dict[int, str]:
+    """app_ports() 的反向映射：{port: app_type}。"""
+    return {v: k for k, v in app_ports().items()}
