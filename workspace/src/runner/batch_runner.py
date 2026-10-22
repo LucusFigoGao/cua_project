@@ -22,7 +22,9 @@ class BatchRunner:
                  model: Optional[str] = None, max_steps: int = 10,
                  pause: float = 1.0, max_tokens: Optional[int] = None,
                  workers: int = 4, run_dir: Optional[Path] = None,
-                 session_dir: Optional[Path] = None, verbose: bool = True):
+                 session_dir: Optional[Path] = None,
+                 kill_after: bool = True, bundle_dir: Optional[Path] = None,
+                 verbose: bool = True):
         self.pool = pool
         self.agent_name = agent_name
         self.model = model
@@ -32,6 +34,8 @@ class BatchRunner:
         self.workers = workers
         self.run_dir = run_dir
         self.session_dir = session_dir
+        self.kill_after = kill_after
+        self.bundle_dir = bundle_dir
         self.verbose = verbose
         self._queue: queue.Queue[Optional[TaskSpec]] = queue.Queue()
         self._results: list[dict] = []
@@ -71,6 +75,7 @@ class BatchRunner:
                     model=self.model, max_steps=self.max_steps,
                     pause=self.pause, max_tokens=self.max_tokens,
                     run_dir=self.run_dir, session_dir=self.session_dir,
+                    kill_after=self.kill_after, bundle_dir=self.bundle_dir,
                     verbose=self.verbose,
                 )
             except Exception as e:
