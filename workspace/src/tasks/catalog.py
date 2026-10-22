@@ -8,11 +8,12 @@ gym/bench/data/tasks.parquet：`app_type ∈ configs/apps.json 的 31 个 app` �
 """
 import json
 import random
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Union
 
-from src.settings import TASKS_DATA, app_ports
+from src.settings import TASKS_DATA, app_ports, port_to_app
 
 DATA_DIR = TASKS_DATA
 INDEX_NAME = "_index.json"
@@ -27,6 +28,33 @@ class TaskSpec:
     instruction: str = ""
     difficulty: Optional[str] = None
     path: Optional[Path] = None
+    # 任务需要的全部 app（含主 app），multi-app 任务会有 2 个以上
+    apps: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not self.apps:
+            self.apps = [self.app_type]
+
+
+_PORT_RE = re.compile(r"host\.docker\.internal:(80\d\d)")
+
+
+def _extract_apps(setup_path: Path, p2a: dict[int, str], primary: str) -> list[str]:
+    """
+    扫 initial_setup.py，提取所有出现的 host.docker.internal:80XX 端口，
+    映射成 app 名列表。primary app 排在第一位，其余按端口升序追加。
+    """
+    try:
+        text = setup_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return [primary]
+    ports = {int(p) for p in _PORT_RE.findall(text)}
+    apps = [primary]
+    for port in sorted(ports):
+        name = p2a.get(port)
+        if name and name != primary:
+            apps.append(name)
+    return apps
 
 
 def load_tasks(data_dir: Union[str, Path, None] = None) -> list[TaskSpec]:
@@ -41,6 +69,7 @@ def load_tasks(data_dir: Union[str, Path, None] = None) -> list[TaskSpec]:
         return []
 
     ports = app_ports()
+    p2a = port_to_app()
     index_path = root / INDEX_NAME
     specs: list[TaskSpec] = []
     seen: set[str] = set()
@@ -52,13 +81,15 @@ def load_tasks(data_dir: Union[str, Path, None] = None) -> list[TaskSpec]:
             tdir = root / task_id
             if not _is_complete(tdir):
                 continue
+            app_type = meta["app_type"]
             specs.append(TaskSpec(
                 task_id=task_id,
-                app_type=meta["app_type"],
-                port=meta.get("port") or ports.get(meta["app_type"], 0),
+                app_type=app_type,
+                port=meta.get("port") or ports.get(app_type, 0),
                 instruction=meta.get("instruction", ""),
                 difficulty=meta.get("difficulty"),
                 path=tdir,
+                apps=_extract_apps(tdir / "initial_setup.py", p2a, app_type),
             ))
             seen.add(task_id)
 
@@ -66,7 +97,7 @@ def load_tasks(data_dir: Union[str, Path, None] = None) -> list[TaskSpec]:
     for tdir in sorted(root.iterdir()):
         if not tdir.is_dir() or tdir.name in seen or not _is_complete(tdir):
             continue
-        spec = _spec_from_dir(tdir, ports)
+        spec = _spec_from_dir(tdir, ports, p2a)
         if spec is not None:
             specs.append(spec)
 
@@ -78,7 +109,8 @@ def _is_complete(tdir: Path) -> bool:
     return tdir.is_dir() and all((tdir / f).exists() for f in REQUIRED_FILES)
 
 
-def _spec_from_dir(tdir: Path, ports: dict[str, int]) -> Optional[TaskSpec]:
+def _spec_from_dir(tdir: Path, ports: dict[str, int],
+                   p2a: dict[int, str]) -> Optional["TaskSpec"]:
     try:
         with open(tdir / "task.json") as f:
             meta = json.load(f)
@@ -94,6 +126,7 @@ def _spec_from_dir(tdir: Path, ports: dict[str, int]) -> Optional[TaskSpec]:
         instruction=meta.get("instruction", ""),
         difficulty=meta.get("difficulty"),
         path=tdir,
+        apps=_extract_apps(tdir / "initial_setup.py", p2a, app_type),
     )
 
 
