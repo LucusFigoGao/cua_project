@@ -32,7 +32,8 @@ def run_one(pool: SandboxPool, spec: TaskSpec, agent_name: str, *,
             model: Optional[str] = None, max_steps: int = 10,
             pause: float = 1.0, max_tokens: Optional[int] = None,
             run_dir: Optional[Path] = None, session_dir: Optional[Path] = None,
-            kill_after: bool = True, verbose: bool = True) -> dict:
+            kill_after: bool = True, bundle_dir: Optional[Path] = None,
+            verbose: bool = True) -> dict:
     """
     端到端跑一个任务，返回 result dict（同时写入 result.json 和 session JSONL）。
 
@@ -48,7 +49,8 @@ def run_one(pool: SandboxPool, spec: TaskSpec, agent_name: str, *,
             pool, cfg, sbx, spec, agent_name,
             model=model, max_steps=max_steps, pause=pause,
             max_tokens=max_tokens, run_dir=run_dir,
-            session_dir=session_dir, verbose=verbose,
+            session_dir=session_dir, bundle_dir=bundle_dir,
+            verbose=verbose,
         )
         stop_reason = result.get("stop_reason")
         return result
@@ -80,14 +82,14 @@ def run_one(pool: SandboxPool, spec: TaskSpec, agent_name: str, *,
 
 def _run_on_sandbox(pool, cfg, sbx, spec, agent_name, *,
                     model, max_steps, pause, max_tokens,
-                    run_dir, session_dir, verbose):
+                    run_dir, session_dir, bundle_dir, verbose):
     task_id = spec.task_id
 
     push.ensure_sandbox_deps(sbx)
     if spec.path:
         push.push_single_task(sbx, task_id, spec.path)
 
-    deploy_task_apps(sbx, spec)
+    deploy_task_apps(sbx, spec, bundle_dir=bundle_dir)
 
     osw.ensure_server(sbx)
     env = PixelSandboxEnv(sbx, install=False)
