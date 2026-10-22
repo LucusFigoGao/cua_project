@@ -19,9 +19,8 @@ from pathlib import Path
 
 from src.agents import registry
 from src.runner.batch_runner import BatchRunner, summarize
-from src.sandbox import apps_host
 from src.sandbox.pool import SandboxPool
-from src.settings import RESULTS, SESSIONS
+from src.settings import APP_BUNDLES, RESULTS, SESSIONS
 from src.tasks import catalog
 
 
@@ -56,6 +55,10 @@ def main() -> int:
                     help="只打印任务列表不执行")
     ap.add_argument("--keep-instances", action="store_true",
                     help="批跑结束后保留沙箱实例（默认 kill 所有 idle 实例）")
+    ap.add_argument("--no-kill-per-task", action="store_true",
+                    help="关闭 kill-per-task 模式，改为复用沙箱（旧行为）")
+    ap.add_argument("--app-bundles", type=Path, default=APP_BUNDLES,
+                    help="app bundle 目录（默认 workspace/app_bundles）")
     ap.add_argument("-q", "--quiet", action="store_true")
     args = ap.parse_args()
 
@@ -112,16 +115,8 @@ def main() -> int:
         print(f"\n[dry-run] 以上 {st['total']} 个任务不执行。")
         return 0
 
-    host_ip = apps_host.detect_host_ip()
-    ports = apps_host.check_ports()
-    if not all(ports.values()):
-        down = [a for a, ok in ports.items() if not ok]
-        print(f"[FAIL] 开发机 {host_ip} 上有 {len(down)} 个 app 没在跑: "
-              f"{', '.join(down[:5])}")
-        return 1
-
-    pool_max = args.workers
-    pool = SandboxPool(app_host=host_ip, max_size=pool_max)
+    kill_after = not args.no_kill_per_task
+    pool = SandboxPool(max_size=args.workers)
     pool.reconcile()
 
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -132,7 +127,8 @@ def main() -> int:
         model=args.model, max_steps=args.max_steps,
         pause=args.pause, max_tokens=args.max_tokens,
         workers=args.workers, run_dir=run_dir,
-        session_dir=session_dir, verbose=not args.quiet,
+        session_dir=session_dir, kill_after=kill_after,
+        bundle_dir=args.app_bundles, verbose=not args.quiet,
     )
 
     print(f"\n开始批跑：{len(tasks)} 个任务，{args.workers} workers\n")
