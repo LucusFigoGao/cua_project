@@ -39,14 +39,16 @@ _REMOTE_BASE = "/tmp/cua_apps"  # shared 和 websites 的共同父目录
 # 包装原始 vite.config，给 preview server 加 allowedHosts + host 绑定。
 # 原始 config 的 preview.port: 0 会被 CLI --port 覆盖，不影响。
 _VITE_WRAPPER_NAME = "vite.config.allowhosts.mjs"
-# 只给 vite preview 用的极简 config：不继承原始 config，避免触发 configurePreviewServer
-# 中的 dev-only import（如 slack_mock 的 ./src/utils/dataManager.js）。
-# vite preview 只需要知道端口、host 和 dist 目录（默认就是 dist/，不需要指定）。
+# wrapper config 不继承原始 vite.config.js（避免触发 dev-only import），
+# 只引入 secureMockApiPlugin 提供 /post /go /state 端点。
+# allowedHosts: true 是 vite 5.4 的布尔值，让 host.docker.internal 能访问。
 _VITE_WRAPPER = """\
+import { secureMockApiPlugin } from '../../shared/secureMockApiPlugin.mjs';
 export default {
+  plugins: [secureMockApiPlugin()],
   preview: {
     host: '0.0.0.0',
-    allowedHosts: 'all',
+    allowedHosts: true,
   },
 }
 """

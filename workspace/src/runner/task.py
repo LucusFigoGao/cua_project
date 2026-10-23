@@ -106,11 +106,6 @@ def _run_on_sandbox(pool, cfg, sbx, spec, agent_name, *,
 
     env.reset_tabs()
 
-    # initial_setup.py 里的 launch_gui 硬编码 DISPLAY=:0，而沙箱 Xvfb 跑在 :1。
-    # 把 :0 的 socket 软链到 :1，让 google-chrome 能找到正确的 display。
-    sbx.commands.run(
-        "ln -sf /tmp/.X11-unix/X1 /tmp/.X11-unix/X0", timeout=10)
-
     sbx.commands.run("rm -f /tmp/task_web_sid", timeout=30)
     sbx.commands.run(
         f"cd {push.REMOTE_ROOT}/{task_id} && DISPLAY=:1 python3 initial_setup.py "
@@ -120,7 +115,11 @@ def _run_on_sandbox(pool, cfg, sbx, spec, agent_name, *,
     if not sid or sid == "NOSID":
         setup_log = sbx.commands.run("tail -15 /tmp/_setup.log", timeout=30).stdout or ""
         raise RuntimeError(f"initial_setup.py 未写出 sid。日志：\n{setup_log}")
-    env.sleep(2)
+
+    # initial_setup.py 末尾的 launch_gui 依赖 IPC socket，模板里 chromium 没有 socket，
+    # URL 不会被打开。通过 CDP REST API 打开并激活目标 URL。
+    _navigate_to_task_url(sbx, env, task_id, sid, spec.port)
+    env.sleep(3)
 
     base_score = _reward(sbx, task_id)
 
@@ -193,6 +192,46 @@ def _write_session_jsonl(trajectory: list, task_id: str,
                 "usage": extra.get("usage"),
             }
             f.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+
+def _navigate_to_task_url(sbx, env, task_id: str, sid: str, port: int) -> None:
+    """
+    用 CDP REST API 打开任务初始 URL，激活新 tab，关掉旧 about:blank。
+    """
+    log = sbx.commands.run(
+        "grep 'GUI_READY\\|launched browser' /tmp/_setup.log 2>/dev/null | tail -1 || true",
+        timeout=10).stdout or ""
+    url = None
+    import re as _re
+    m = _re.search(r'(http://[^\s"]+)', log)
+    if m:
+        url = m.group(1)
+    if not url:
+        url = f"http://host.docker.internal:{port}/?sid={sid}"
+
+    old_ids = {t.get("id") for t in env.list_tabs()}
+
+    result = env.open_url(url)
+    # result 是 {"output": "<json string>", ...}，从 output 里解析 id
+    new_tid = None
+    try:
+        import json as _json
+        output = result.get("output", "") if isinstance(result, dict) else str(result)
+        new_tid = _json.loads(output).get("id")
+    except Exception:
+        pass
+    if not new_tid:
+        import time as _time; _time.sleep(1)
+        for t in env.list_tabs():
+            if t.get("id") not in old_ids:
+                new_tid = t.get("id")
+                break
+
+    if new_tid:
+        env.execute(f"curl -s -X POST 'http://127.0.0.1:9222/json/activate/{new_tid}'")
+
+    for tid in old_ids:
+        env.close_tab(tid)
 
 
 def _reward(sbx: Sandbox, task_id: str):
