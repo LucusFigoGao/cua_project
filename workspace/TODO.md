@@ -188,6 +188,27 @@ cd workspace && python -m src.cli.batch_run \
 > ✅ T5（2026-10-22）：`batch_run.py` 移除开发机检查，新增 `--no-kill-per-task` / `--app-bundles` flag；`BatchRunner` 透传 `kill_after` / `bundle_dir`。
 > ✅ T6（2026-10-22）：`pool.py` `acquire()` 默认改为 `ensure_apps=False`，旧路径保留可显式传 `True` 回退。
 > ✅ T8（2026-10-22）：三阶段烟雾测试全部通过。单 app / multi-app（3 app）/ 5-worker 批跑（27 任务）均 env_error=0，沙箱 kill 正常。修复过程中发现并修复：`REMOTE_APPS_ROOT` 权限问题、e2b gRPC idle timeout、`--omit=optional` 导致 rollup native 模块缺失、vite.config.js dev-only import 问题、`bundle_path.stem` 双后缀 bug。
+> ✅ 页面显示修复（2026-10-23）：`launch_gui` 依赖 IPC socket 在沙箱内不通，改为 setup 后用 CDP REST API 打开并激活目标 URL；vite wrapper config 加 `secureMockApiPlugin` + `allowedHosts: true`。28-worker 冒烟测试 28/28 通过，gitlab / slack 等页面初始状态正确加载。
+
+---
+
+### T9 接入更多模型并验证
+
+当前 `src/agents/adapters/` 中只有 `qwen-cua` 经过完整链路验证，其余 adapter 状态：
+
+| agent | adapter | 通道 | 已验证 |
+|---|---|---|---|
+| `qwen-cua` | `qwen_cua.py` | openai | ✅ 完整链路 |
+| `qwen3vl` | `qwen3vl.py` | openai | ❌ 未在新沙箱架构下验证 |
+| `claude-cu` | `claude_cu.py` | anthropic | ❌ 未在新沙箱架构下验证 |
+| `gemini-cu` | `gemini_cu.py` | google_genai | ❌ 上游 scaffold 已知问题（空 part crash），未验证 |
+| `raw-vlm` | `raw_vlm.py` | openai | ❌ 未在新沙箱架构下验证 |
+
+**做法**：
+- 每个 adapter 跑 `--sample-per-app 1 --max-steps 5 --workers 1` 单轮冒烟，确认截图有页面内容、episode 无 infra_error
+- `raw-vlm` 用 `--model gemini-3.5-flash` 验证（不挑模型，最容易通）
+- `gemini-cu` 已知上游 scaffold 问题，验证前先评估是否值得修
+- 验证通过后在此表格更新状态
 
 ---
 
