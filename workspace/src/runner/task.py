@@ -106,6 +106,11 @@ def _run_on_sandbox(pool, cfg, sbx, spec, agent_name, *,
 
     env.reset_tabs()
 
+    # initial_setup.py 里的 launch_gui 硬编码 DISPLAY=:0，而沙箱 Xvfb 跑在 :1。
+    # 把 :0 的 socket 软链到 :1，让 google-chrome 能找到正确的 display。
+    sbx.commands.run(
+        "ln -sf /tmp/.X11-unix/X1 /tmp/.X11-unix/X0", timeout=10)
+
     sbx.commands.run("rm -f /tmp/task_web_sid", timeout=30)
     sbx.commands.run(
         f"cd {push.REMOTE_ROOT}/{task_id} && DISPLAY=:1 python3 initial_setup.py "

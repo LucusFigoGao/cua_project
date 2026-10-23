@@ -100,6 +100,8 @@ def main() -> int:
         # ── 3. 初始状态 ───────────────────────────────────────────────────
         print("[ 3/5 ] 注入初始状态（initial_setup.py）...")
         env.reset_tabs()
+        # initial_setup.py 里的 launch_gui 硬编码 DISPLAY=:0，而沙箱 Xvfb 跑在 :1。
+        sbx.commands.run("ln -sf /tmp/.X11-unix/X1 /tmp/.X11-unix/X0", timeout=10)
         sbx.commands.run("rm -f /tmp/task_web_sid", timeout=30)
         sbx.commands.run(
             f"cd {push.REMOTE_ROOT}/{spec.task_id} && DISPLAY=:1 python3 initial_setup.py "
