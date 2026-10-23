@@ -187,6 +187,7 @@ cd workspace && python -m src.cli.batch_run \
 > ✅ T4（2026-10-22）：`task.py` 新增 `kill_after` / `bundle_dir` 参数；`pool.acquire(ensure_apps=False)`；插入 `deploy_task_apps(sbx, spec)`；finally 块改为 kill_after 时无条件 kill。
 > ✅ T5（2026-10-22）：`batch_run.py` 移除开发机检查，新增 `--no-kill-per-task` / `--app-bundles` flag；`BatchRunner` 透传 `kill_after` / `bundle_dir`。
 > ✅ T6（2026-10-22）：`pool.py` `acquire()` 默认改为 `ensure_apps=False`，旧路径保留可显式传 `True` 回退。
+> ✅ T8（2026-10-22）：三阶段烟雾测试全部通过。单 app / multi-app（3 app）/ 5-worker 批跑（27 任务）均 env_error=0，沙箱 kill 正常。修复过程中发现并修复：`REMOTE_APPS_ROOT` 权限问题、e2b gRPC idle timeout、`--omit=optional` 导致 rollup native 模块缺失、vite.config.js dev-only import 问题、`bundle_path.stem` 双后缀 bug。
 
 ---
 
