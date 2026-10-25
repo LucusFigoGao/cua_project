@@ -17,7 +17,7 @@ TASK_ARCHIVE = PROJECT_ROOT / "gym" / "bench" / "artifacts" / "cua_gym_tasks_v1.
 APP_BUNDLES = WORKSPACE / "app_bundles"
 
 # 沙箱
-SANDBOX_TEMPLATE = "sdt-hojglb51"
+SANDBOX_TEMPLATE = "sdt-ku6bpsvf"
 SANDBOX_TIMEOUT = 86400  # 24h
 POOL_MAX_SIZE = int(os.environ.get("CUA_POOL_MAX_SIZE", 12))
 POOL_TAG = {"pool": "cua_gym"}
