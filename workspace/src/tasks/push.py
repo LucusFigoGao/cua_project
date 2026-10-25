@@ -122,3 +122,27 @@ def list_remote_tasks(sbx: Sandbox, remote_root: str = REMOTE_ROOT) -> list[str]
         f"find {remote_root} -mindepth 1 -maxdepth 1 -type d -printf '%f\\n' 2>/dev/null || true",
         timeout=60)
     return [l for l in (r.stdout or "").splitlines() if l.strip()]
+
+
+def push_single_task(sbx: Sandbox, task_id: str, task_path: Path,
+                     remote_root: str = REMOTE_ROOT, timeout: int = 60) -> None:
+    """
+    把单个任务的文件推到沙箱。只传 task.json / initial_setup.py / reward.py（~30KB）。
+    比 push_tasks 轻量得多：不打 tar，不写 manifest，适合批跑时按需推送。
+    """
+    remote_dir = f"{remote_root}/{task_id}"
+    sbx.commands.run(f"mkdir -p {remote_dir}", timeout=30)
+    for name in ("task.json", "initial_setup.py", "reward.py"):
+        local = task_path / name
+        if local.is_file():
+            sbx.files.write(f"{remote_dir}/{name}", local.read_bytes())
+
+
+def ensure_sandbox_deps(sbx: Sandbox) -> bool:
+    """
+    保证沙箱里的运行依赖就绪：chrome shim + requests。
+    幂等，可在 acquire 后安全调用。返回 shim 是否可用。
+    """
+    shim = ensure_chrome_shim(sbx)
+    ensure_requests(sbx)
+    return shim

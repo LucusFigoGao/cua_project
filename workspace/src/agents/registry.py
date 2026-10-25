@@ -150,8 +150,7 @@ def load(name: str, *, model: Optional[str] = None,
                            f"但 ICHAT_CHANNELS 里没有它。")
     api_key = ichat_key()
     if not api_key:
-        raise AdapterError("ICHAT_API_KEY 未设置。它定义在 ~/.bashrc，非交互 shell "
-                           "不会自动加载，需要先 source（或用 bash -lc 跑）。")
+        raise AdapterError("ICHAT_API_KEY 未设置。")
 
     kwargs = dict(spec.defaults)
     kwargs.update(overrides)

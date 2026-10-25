@@ -50,112 +50,279 @@ FunctionDeclaration。要用它得把翻译表改成 Google 预定义函数名�
 - `parse_miss` 检测只认 `<tool_call>` 和 ``` 两种标记（`src/runner/episode.py`）。
   `qwen/actions.py:317` 在解析不出任何 tool_call 时 fallback 成 `DONE`，解析失败
   长得跟任务完成一样。接新 agent 时这个判据要跟着扩。
-- **实例会卡在 busy**：进程被 `timeout`/Ctrl-C 杀掉时 `finally` 里的 `release`
-  跑不到，该实例永久 busy，下次 `acquire` 会新建一个。`reconcile()` 应该回收
-  超时未心跳的 busy 实例。批跑前必须修，否则会把配额耗光。
-  目前的人工兜底：`python -m src.cli.manage_pool --release-all`（无跨进程锁，确认没有任务在跑再用）。
+  **首轮批跑已触发 3 次 parse_miss**（google_docs / pinterest / salesforce），
+  其中 google_docs 的 parse_miss 导致 delta=0，任务实际没做就结束了。
 
-## 2. episode 健壮性（M4 前置）
+## 2. episode 健壮性（已落地）
 
-### 2.1 执行与观测解耦
+已实现：
 
-harness 没有「每步只发一个动作」的硬约束，各 agent 一步都可能产出多条动作：
+- **环境异常兜底**：`env.step()` / `env.get_obs()` 异常在 `run_episode` 内捕获，
+  `stop_reason="env_error"`，保留已跑步数 + error 信息，`result.json` 正常写入。
+- **坏实例不回池**：`env_error` 时 `pool.kill()` 而不是 `release()`。
+- **动作执行结果记录**：`pixel_env.step()` 返回 `_exec` 字段（`/execute` 端点原始
+  `{status, output, error, returncode}`），记入 trajectory 的 `exec_result`。
+- **单动作约束**：5 个 adapter 全部在提示词中约束每步只出一个动作（不改 osworld/ 原始文件），
+  runner 层做截断兜底。去掉了 `episode.py:103` 的冗余 `get_obs()`。
+- **final.png**：循环结束后额外截一张 `screenshots/final.png`，对照 reward 用。
+- **busy-stuck 回收**：`PoolInstanceConfig` 加 `busy_since` 时间戳，`reconcile()` 自动
+  回收超时 30 分钟的 busy 实例。
 
-| agent | 提示词约束 | 一步产出多条的来源 |
+**首轮批跑验证**：27 个任务 env_error = 0，环境全程稳定。
+
+### 留到后续再定
+
+哪些异常值得原地重试、重试几次、超时阈值多少、整任务重跑上限。
+首轮数据显示环境侧稳定，暂不需要重试机制。
+
+## 3. 坐标约定标定（已落地）
+
+统一使用 **relative（0-999）** 坐标空间。各 adapter 状态：
+
+| adapter | coordinate_space | 机制 |
 |---|---|---|
-| `raw-vlm` | 明确允许多行（`prompts.py:7` "one line or multiple lines"） | 多个代码块 / `;` 拆分 |
-| `qwen-cua` / `qwen3vl` | 软约束 "A single <tool_call>"，但解析器照单全收多个 | 带修饰键的点击 → keyDown/click/keyUp；多行 type → typewrite + enter |
-| `claude-cu` | 原生允许一条回复多个 tool_use | 多个 tool_use block |
-| `gemini-cu` | 无 | 多个 function call；type+press_enter、drag 各拆两条 |
+| qwen-cua | relative | 提示词 1000x1000 + `adjust_coordinates()` 反变换 |
+| qwen3vl | relative | 同上 |
+| gemini-cu | relative | schema 0-999 + adapter `_xy()` 反变换 |
+| raw-vlm | relative | 提示词 1000x1000 + adapter `_scale_relative_coords()` 反变换 |
+| claude-cu | absolute | Anthropic 原生 `computer_20241022` 工具自带缩放，不走 0-999 体系 |
 
-**不在 harness 层强制单动作**：那会改变模型相对官方 baseline 的行为，测到的就不是同一个东西。
-要修的是观测侧：`env.step()` 每条动作后都截一张图，而 `episode.py:103` 又重新截一次，
-k 条动作截 k+1 张，只用最后一张。改为 runner 循环里只执行不观测，每步结束统一 `get_obs()` 一次。
+## 4. M4 批量调度（已落地）
 
-顺带：最后一步动作后的画面不落盘（`stepNN.png` 都是动作前的），补一张 `final.png`，对照 reward 用。
+```
+src/runner/task.py           run_one()：单任务完整生命周期，自动 acquire/push/episode/reward/release
+src/runner/batch_runner.py   BatchRunner：多线程批跑引擎
+src/cli/batch_run.py         CLI 入口
+src/tasks/push.py            push_single_task()：轻量单任务推送（~30KB，~100ms）
+```
 
-### 2.2 环境侧异常
+用法：
+```bash
+cd workspace && python -m src.cli.batch_run \
+    --agent qwen-cua --workers 4 --sample-per-app 3 \
+    --exclude-app monday_mock --resume
+```
 
-现状：agent 异常有兜底（保留已跑的步、记 `agent_error`），环境异常没有——`env.step()` 抛错直接
-冲出 `run_episode`，轨迹丢失、`result.json` 不写，`finally` 里还把这个可能已坏的实例 `release`
-回 idle，下一个任务接着用。
+**任务与实例已解绑**：`run_one()` 在 setup 前只推当前任务的 3 个文件，不需要提前 push_tasks。
+`cli/push_tasks.py` 降为调试工具。
 
-**先布局骨架，策略留给数据**。现在就要定的是那些不定下来、批跑结果就不可信的东西：
+### 首轮批跑结果（qwen-cua / qwen3.8-max / max_steps=50）
 
-1. **归因**：`stop_reason` 增加 `env_error`；环境挂掉的任务不计入模型成功率，要么重跑要么单列。
-   否则沙箱抖一次就记成模型做错一题。
-2. **轨迹不丢**：`env.step()` 的异常与 agent 异常一样在 `run_episode` 内捕获，保留前 N 步再返回。
-3. **坏实例不回池**：环境异常时实例 `kill` 而不是 `release`（或至少标记、下次 acquire 前做体检）。
-4. **动作执行结果不再丢弃**：OSWorld server `/execute` 返回 `status/output/error/returncode`
-   （`desktop_env/server/main.py:107`），`step()` 现在全部扔掉。模型生成的代码语法错、
-   `pyautogui` 报错都静默变成「执行了 1 个动作」。记进 trajectory 的每条动作里。
-   这条要先区分：returncode≠0 多半是**模型**的错（代码写坏了），不是环境错，不该触发 2/3。
+27 个 app 各 1 个任务，排除 monday_mock 等 4 个，总耗时 78 分钟。
 
-可预见的环境故障面（来自代码，未实测频率）：envd 连接断/沙箱被回收（e2b 异常）、
-`curl` 到 server 超时（`_post_json` 返回空 → 静默 `{}`）、server 崩溃（`/screenshot` 非 200 →
-`PixelEnvError`）、24h 到期、开发机 app 不可达（setup 写不出 sid）。
+| 指标 | 值 |
+|---|---|
+| env_error | 0 |
+| 平均 reward_delta | 0.406 |
+| delta > 0（有进展） | 17/27 = 63% |
+| delta = 1.0（满分） | 5 个：facebook, github, jira, postman, shopify_admin |
+| delta = 0（没做对） | 9 个 |
+| stop=done（主动结束） | 11 |
+| stop=max_steps（跑满 50 步） | 13 |
+| stop=parse_miss | 3（google_docs, pinterest, salesforce） |
 
-**留到 rollout 再定**：哪些异常值得原地重试、重试几次、超时阈值多少、整任务重跑上限。
-这些依赖真实故障频率，先拍脑袋只会定错。第一轮批跑按上面 1-4 把异常分类落盘，看分布再定。
+**发现的问题**：
 
-## 3. 坐标约定标定
+- **twitter_mock reward=None**：`reward.py` 输出格式不在已识别的两种模式
+  （`REWARD: 0.5` / `Score: .../... = 0.5`）内，需要补第三种解析模式。
+- **基线非零已确认 2 个**：pinterest（1.0，NO-OP）、gitlab（0.2）。
+  `reward_delta` 作为主指标是对的。
+- **13/27 跑满 50 步**：模型没有在合理步数内完成。要看是任务难还是模型在循环。
 
-`coordinate_type` 取 relative（0-999）还是 absolute，需实测确认，不能照搬默认值。
-**由本人确认**。
+## 5. 系统性迁移（待启动）
 
-注意 OSWorld 的 `SYS_PROMPT_IN_SCREENSHOT_OUT_CODE` 全文不声明屏幕分辨率或坐标空间，
-而 qwen scaffold 的 `build_description_prompt()` 会明写（relative 时给
-`The screen's resolution is 1000x1000`）—— 换 agent 时这项会跟着变。
+**需求**：把单个任务的完整链路做成"每任务独占沙箱、用完即销毁"：申请沙箱、上传网页和任务、npm install、build 并起服务、跑 agent、跑 reward、release 并 kill。要求支持 20 台并发，空置率低于 X（X 待定），不依赖目前内网那台托管 31 个 app 的开发机。
 
-## 4. M4 批量调度
+**任务分布**：共 1062 个任务，28 个 app。931 个只用 1 个 app，131 个（12%）跨多个 app（106个用2个，21个用3个，4个用4到5个）。常见组合：google_sheets+slack、google_sheets+gmail、google_drive+gmail、gitlab+slack。
 
-`src/runner/batch_runner.py`：N 个 worker 线程消费任务队列。
-每个 worker 拿实例是秒级的，批跑启动开销基本消失。并发上限 12 个实例（配额所限）。
+### 之前已完成的探测结论（4C/8G 的 sdt-hojglb51 上实测）
 
-依赖第 1、2 项先落地，否则每接一个模型都要重做一遍日志与计量。
+**单沙箱完整冷启动，均值 21.8s（16.8到25.6s）**
 
-同时要做的两件结构调整：
+| 阶段 | 耗时 |
+|---|---|
+| Sandbox.create | 0.4s |
+| OSWorld 依赖（apt 7.8s，pip 3.4s，probe 0.6s） | 约 11.8s（首次真装） |
+| OSWorld server 起来 | 2.2到2.5s |
+| chrome shim、hosts、上传单 app 包（0.2MB） | 不到 1s |
+| npm install（冷） | 4.1s（2.5到6.2s） |
+| vite preview 起到端口 200 | 1.1到1.3s |
 
-- **任务与实例解绑**：现在任务要先 `push_tasks` 到某个实例，`run_task` 要求任务已在拿到的
-  实例上（`run_task.py:98`）。多实例时 acquire 拿到的不一定是推过的那台；实例被替换后是空的；
-  本地重解包后实例上的副本静默过期。改为 `run_task` 在 setup 前只推当前任务的 3 个文件
-  （几十 KB，~100ms）。`google-chrome` shim 与 `requests` 是实例级准备，挪进 `pool.acquire`
-  的就绪检查。`cli/push_tasks.py` 之后降为调试工具。
-- **单任务生命周期抽出**：`run_task.main()` 里 setup → 基线 → episode → 终值 → 落盘这段
-  抽成 `src/runner/task.py::run_one(sbx, spec, agent)`，cli 与 batch_runner 共用。
+- 12并发完整冷启动：12/12 就绪，wall 27.4s，apt/pip/npm 源均未被压垮。
+- 单 app 部署资源：磁盘 65到188MB（共 8.0G），内存约 1.0GB（共 7.8G），2C4G 放得下。
+- 任务实测时长：mean 815s，median 849s，p25 370s。
+- 依赖安装发生在跑任务时而非建实例时：`task.py:81` 的 `osw.ensure_server(sbx)` 默认 install=True；`ensure_server` 有探活早退，所以现有复用池里每个实例只有第一个任务付这笔钱。改成 kill-per-task 后每个任务都要付。
 
-## 5. 补 `src/smoke_test/test_apps_host.py`
+**策略对比**
 
-开发机 app 的验证目前没有脚本覆盖，需要测三件事：
-31 个 app 在开发机上起得来、沙箱经 `host.docker.internal` 能访问到、
-不同 sid 之间状态互不污染。
+| 策略 | 每任务额外开销 | 实例利用率 |
+|---|---|---|
+| 每任务 kill 重建 | 21.8s | 97.3%（空置率约 2.7%） |
+| 复用且换 app | 5.0s | 99.4% |
+| 复用且同 app | 0.12s | 约 100% |
 
-## 6. monday_mock（8017）整个 app 白屏
+**已确认的代码现状**
 
-`App.jsx` 只挂了 `AppProvider`，但 `Sidebar` / `Board` / `AutomationsPanel` 等 7 个活跃
-组件用的是另一套 `useStore()`（来自 `StoreContext`），而 `StoreProvider` 从未挂载；
-`createContext()` 又没给默认值，hook 返回 undefined，解构 `state` 直接抛错。
+- `pool.acquire(ensure_apps=False)`（pool.py:138,162）已能绕过"31 个 app 全部可达"的检查。
+- `pool.kill()`（pool.py:289-295）已含 Sandbox.kill、注册表 pop、_save、notify_all。
+- `pool._create_new_locked()`（pool.py:244-260）只有 Sandbox.create 加写注册表。
+- `apps_host.build_apps(apps=[one])` 已按 app 参数化。
+- `push.push_single_task()` 推 3 个文件约 30KB，已有。
+- `run_episode()`、`PixelSandboxEnv`、`_reward()`、`reward_delta` 已有。
+- `task.py:39` 的 `pool.acquire()` 没传 `spec.app_type`；`batch_runner.py` 是纯 FIFO 的 `queue.Queue` 加 N 个 daemon worker，已能跑 20并发。
+- 依赖定义在 `src/sandbox/osworld_server.py:29-31`（`gnome-screenshot xdotool` 加 `flask pyautogui python-xlib pillow lxml numpy requests`）。
+- 你在 `/tmp/bench_deploy/` 里已实测跑通部署命令，包括 `setsid nohup` 三流重定向、`--strictPort`、`vite.config.allowhosts.mjs` 包装、`pkill -f '[v]ite'`。
 
-43 个任务因此全部不可做。修复要改 `/data/workspace/cua_hub`（另一个仓库，有未提交改动），
-在那之前测试集应排除该 app。
+**关键判断**：npm install 只占冷启动 19%，Python 通用 mock server 省不了多少且有保真度风险，本轮不做。kill-per-task 下每个 worker 独占实例，不存在实例空等派发，空置率由冷启动占比结构性决定（约 2.6%），affinity 调度本轮可以不做。
 
-同目录下 `discord_mock`(8001) 的 `useStore` 是 zustand（不需要 provider，仅同名）、
-`microsoft_teams_mock`(8016) 那两个文件没人 import（死代码），两者实测渲染正常。
+# TODO List
 
-## 7. 基线 reward 扫描
+> 以下各项均面向「系统性迁移」目标：每任务独占沙箱、app 在沙箱内部署、用完即 kill。
+> 执行顺序：T7 → T1 → T2 → T3 → T4 → T5/T6 → T8。
+>
+> ✅ T7（2026-10-22）：`settings.py` 新增 `APP_BUNDLES` 路径常量和 `port_to_app()` 反向映射函数。
+> ✅ T1（2026-10-22）：`TaskSpec` 新增 `apps: list[str]` 字段，`catalog.py` 扫 `initial_setup.py` 端口自动填充；131 个 multi-app 任务识别正确。
+> ✅ T2（2026-10-22）：`src/cli/pack_app_bundles.py` 新增；31 个 app bundle + `_shared.tar.gz` 打包完成，存于 `app_bundles/`，合计 5MB。
+> ✅ T3（2026-10-22）：`src/sandbox/app_deploy.py` 新增；`set_loopback_host` / `ensure_shared` / `deploy_app` / `deploy_task_apps` 四个函数，实现沙箱内 app 完整部署链路。
+> ✅ T4（2026-10-22）：`task.py` 新增 `kill_after` / `bundle_dir` 参数；`pool.acquire(ensure_apps=False)`；插入 `deploy_task_apps(sbx, spec)`；finally 块改为 kill_after 时无条件 kill。
+> ✅ T5（2026-10-22）：`batch_run.py` 移除开发机检查，新增 `--no-kill-per-task` / `--app-bundles` flag；`BatchRunner` 透传 `kill_after` / `bundle_dir`。
+> ✅ T6（2026-10-22）：`pool.py` `acquire()` 默认改为 `ensure_apps=False`，旧路径保留可显式传 `True` 回退。
+> ✅ T8（2026-10-22）：三阶段烟雾测试全部通过。单 app / multi-app（3 app）/ 5-worker 批跑（27 任务）均 env_error=0，沙箱 kill 正常。修复过程中发现并修复：`REMOTE_APPS_ROOT` 权限问题、e2b gRPC idle timeout、`--omit=optional` 导致 rollup native 模块缺失、vite.config.js dev-only import 问题、`bundle_path.stem` 双后缀 bug。
+> ✅ 页面显示修复（2026-10-23）：`launch_gui` 依赖 IPC socket 在沙箱内不通，改为 setup 后用 CDP REST API 打开并激活目标 URL；vite wrapper config 加 `secureMockApiPlugin` + `allowedHosts: true`。28-worker 冒烟测试 28/28 通过，gitlab / slack 等页面初始状态正确加载。
 
-`e872dfd6`（pinterest）实测基线 REWARD 就是 1.0 —— 这是故意设计的 NO-OP 任务，
-`reward.py` 明写 "the correct agent behavior is to recognize the follow already exists
-and do nothing"。显式标注 NO-OP 的只有 1 个，但「基线非零」范围更大：
-部分 `reward.py` 含反向检查项（「不该动的东西没被动过」），什么都不做反而先得分。
+---
 
-所以该记的指标是 **`final_reward - baseline_reward`**，不是 `final_reward`。
-两个字段 `result.json` 都已存，目前没人用这个差值。
+### T9 接入更多模型并验证
 
-建议在批跑前做一次基线扫描：只跑 `initial_setup.py` + `reward.py`，不调模型，
-记下每个任务的基线分。不花 token，结果直接决定测试集怎么选。
+当前 `src/agents/adapters/` 中只有 `qwen-cua` 经过完整链路验证，其余 adapter 状态：
 
-## 8. 扩展到几百上千个网页
+| agent | adapter | 通道 | 已验证 |
+|---|---|---|---|
+| `qwen-cua` | `qwen_cua.py` | openai | ✅ 完整链路 |
+| `qwen3vl` | `qwen3vl.py` | openai | ❌ 未在新沙箱架构下验证 |
+| `claude-cu` | `claude_cu.py` | anthropic | ❌ 未在新沙箱架构下验证 |
+| `gemini-cu` | `gemini_cu.py` | google_genai | ❌ 上游 scaffold 已知问题（空 part crash），未验证 |
+| `raw-vlm` | `raw_vlm.py` | openai | ❌ 未在新沙箱架构下验证 |
 
-开发机磁盘（build 产物）会先于内存成为瓶颈（31 个 app 的 vite preview 合计才 1.68GB，
-磁盘 70GB）。届时考虑按需拉起或反向代理分发。
+**做法**：
+- 每个 adapter 跑 `--sample-per-app 1 --max-steps 5 --workers 1` 单轮冒烟，确认截图有页面内容、episode 无 infra_error
+- `raw-vlm` 用 `--model gemini-3.5-flash` 验证（不挑模型，最容易通）
+- `gemini-cu` 已知上游 scaffold 问题，验证前先评估是否值得修
+- 验证通过后在此表格更新状态
+
+---
+
+### T1 扩展 TaskSpec：记录任务所需的全部 app 端口
+
+**问题**：`TaskSpec.app_type` 只有主 app，131 个 multi-app 任务还依赖其他端口的 app，但目前没有字段存储。
+
+**做法**：
+- `src/tasks/catalog.py`：解析 `initial_setup.py` 文本，提取所有 `host.docker.internal:80XX` 端口，经 `PORT_TO_APP` 反向映射成 app 名列表，写入新字段 `TaskSpec.apps: list[str]`（默认 `[app_type]`）
+- `src/settings.py`：由 `apps.json` 生成 `PORT_TO_APP: dict[int, str]` 常量
+
+**验证**：`load_tasks()` 后统计 `len(spec.apps) > 1` 的条数应等于 131。
+
+---
+
+### T2 预打包 app dist bundle
+
+**问题**：沙箱内部署 app 需要上传 build 产物，目前没有独立于开发机的可传输格式。
+
+**做法**：
+- `src/cli/pack_app_bundles.py`：遍历 `configs/apps.json` 的 31 个 app，从 `CUA_HUB_DIR/websites/<app>/` 打出 `app_bundles/<app>.tar.gz`（内含 `dist/`、`package.json`、`vite.config*`），已有 dist 则跳过（`--force` 重打）
+- `workspace/.gitignore` / `workspace/configs/` 的忽略规则加上 `app_bundles/`
+- 单个 app 约 65~188 MB，31 个合计约 4 GB，需确认磁盘空间
+
+**验证**：`tar tzf app_bundles/gitlab_mock.tar.gz | grep dist/` 能列出文件。
+
+---
+
+### T3 新模块 `src/sandbox/app_deploy.py`
+
+**问题**：目前没有在沙箱内部起 app 的代码；`deploy.py` 写的是外部 IP，迁移后要写 loopback。
+
+**做法**（基于 `/tmp/bench_deploy/` 已验证的命令）：
+
+```python
+set_loopback_host(sbx)
+    写 /etc/hosts: "127.0.0.1  host.docker.internal"（root）
+
+deploy_app(sbx, app_name, bundle_dir, port)
+    上传 app_bundles/<app_name>.tar.gz → 沙箱 /tmp/
+    解压到 /opt/apps/<app_name>/
+    写 vite.config.allowhosts.mjs（允许 host.docker.internal 访问）
+    setsid nohup vite preview --port <port> --strictPort >/dev/null 2>&1 &
+    wait_for_port(sbx, port, timeout=30s)：curl 200 为止
+
+deploy_task_apps(sbx, spec)
+    set_loopback_host(sbx)
+    for app in spec.apps: deploy_app(sbx, app, ...)
+```
+
+**关键细节**：
+- `pkill -f '[v]ite.*<port>'` 清理残留进程（env_error 后 kill 整个沙箱，但 wait_for_port 超时时需要）
+- multi-app 任务各 app 并发上传、串行 vite preview（端口间不干扰，可并发起）
+- `vite.config.allowhosts.mjs` 内容已在 `/tmp/bench_deploy/` 测试过
+
+---
+
+### T4 修改 `src/runner/task.py` 走 kill-per-task 路径
+
+**问题**：`_run_on_sandbox()` 依赖 `deploy.ensure_apps_reachable()`（外部开发机），`finally` 块只有 `env_error` 时才 kill。
+
+**做法**：
+- `run_one()` 新增参数 `kill_after: bool = True`
+- `pool.acquire(ensure_apps=False)`（已支持，改为传参而非默认）
+- 替换：`deploy.ensure_apps_reachable(sbx)` → `app_deploy.deploy_task_apps(sbx, spec)`
+- `finally` 块：`kill_after=True` 时无论成功/失败均 `pool.kill(cfg.sandbox_id)`；`False` 时保持原复用逻辑（不删旧路径，保留回退能力）
+
+**影响文件**：`src/runner/task.py`（约 10 行改动）
+
+---
+
+### T5 修改 `src/cli/batch_run.py`
+
+**问题**：无 kill-per-task 开关，无 app-bundles 路径参数，默认仍走开发机。
+
+**做法**：
+- 新增 `--kill-per-task / --no-kill-per-task`（默认 True）
+- 新增 `--app-bundles <dir>`（默认 `workspace/app_bundles/`，传给 `app_deploy`）
+- `--workers` 上限说明：T8 实测后写进 help 文字
+
+---
+
+### T6 修改 `src/sandbox/pool.py`
+
+**问题**：`acquire()` 默认 `ensure_apps=True`，kill-per-task 模式下每次 acquire 还是会尝试检查开发机。
+
+**做法**：
+- `acquire()` 默认改为 `ensure_apps=False`（调用方显式传 `True` 才走旧路径）
+- 现有 `_ensure_apps_ready()` 保留但标记 `# deprecated: reuse-pool only`
+- `kill_per_task` 不需要在 pool 层感知，T4 的 `kill_after` 已处理
+
+---
+
+### T7 `src/settings.py` 新增常量
+
+**做法**：
+```python
+APP_BUNDLES = WORKSPACE / "app_bundles"
+
+def port_to_app() -> dict[int, str]:
+    """端口 → app_name 反向映射，由 apps.json 推导。"""
+    return {v: k for k, v in app_ports().items()}
+```
+
+这是 T1 和 T3 的共同依赖，应最先合入。
+
+---
+
+### T8 端到端烟雾测试
+
+依次验证：
+
+1. **单 app 任务**：选一个简单任务（如 `github_mock`），`--kill-per-task --workers 1`，确认 app 在沙箱内可达、episode 跑通、reward 写入、沙箱 kill 成功
+2. **Multi-app 任务**：选 `ad7989c7`（需要 `google_sheets_mock` + `slack_mock` + 另一 app），确认多 app 均在沙箱内可达
+3. **20 并发压测**：`--workers 20 --sample-per-app 1`，观察冷启动时间分布、空置率、OOM 是否触发
+
+**成功指标**：env_error = 0，reward_delta 分布与首轮批跑（开发机模式）接近，p95 冷启动 < 35s。

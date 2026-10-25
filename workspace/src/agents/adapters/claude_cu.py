@@ -59,15 +59,35 @@ class ClaudeAdapter:
                 texts.append(str(a["raw_response"]))
 
         reply = "\n".join(texts) if texts else str(reasonings or "")
-        return reply, actions, {"raw_actions": raw}
+        usage = getattr(self.agent, "_last_usage", {})
+        return reply, actions, {"raw_actions": raw, "usage": usage}
 
 
 def build(*, model: str, base_url: str, api_key: str, **kw):
-    # make_anthropic_client 不接 base_url，但 SDK 读这个环境变量。
     os.environ["ANTHROPIC_BASE_URL"] = base_url
     from mm_agents.anthropic.main import AnthropicAgent
 
-    return ClaudeAdapter(AnthropicAgent(model=model, api_key=api_key, **kw))
+    kw.setdefault("system_prompt_suffix",
+                  "\nIMPORTANT: Output exactly ONE tool call per response. "
+                  "Do not chain or batch multiple actions in a single turn.")
+    agent = AnthropicAgent(model=model, api_key=api_key, **kw)
+
+    # monkey-patch _response_to_params 捕获 response.usage
+    agent._last_usage = {}
+    _orig = agent._response_to_params
+    def _patched_rtp(response, tool_map):
+        usage = getattr(response, "usage", None)
+        if usage:
+            agent._last_usage = {
+                "prompt_tokens": getattr(usage, "input_tokens", None),
+                "completion_tokens": getattr(usage, "output_tokens", None),
+                "total_tokens": (getattr(usage, "input_tokens", 0) or 0)
+                                + (getattr(usage, "output_tokens", 0) or 0),
+            }
+        return _orig(response, tool_map)
+    agent._response_to_params = _patched_rtp
+
+    return ClaudeAdapter(agent)
 
 
 register(AdapterSpec(

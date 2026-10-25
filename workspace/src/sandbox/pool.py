@@ -41,6 +41,7 @@ class PoolInstanceConfig:
     #: hosts 映射已配好且开发机上的 app 探活通过。
     apps_ready: bool = False
     app_host: Optional[str] = None  # app 实际跑在哪台机器上
+    busy_since: Optional[str] = None  # ISO 时间戳，acquire 设 busy 时写入
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -89,6 +90,8 @@ class SandboxPool:
 
     # ---------- 校准 ----------
 
+    BUSY_TIMEOUT = 1800  # 30 分钟
+
     def reconcile(self) -> dict:
         """以 Sandbox.list(metadata=POOL_TAG) 为真相源校准本地 registry。"""
         remote = {}
@@ -98,7 +101,7 @@ class SandboxPool:
                 remote[info.sandbox_id] = info
             if not paginator.has_next:
                 break
-        removed, added = [], []
+        removed, added, recovered = [], [], []
         with self._cond:
             for sid in list(self._instances):
                 if sid not in remote:
@@ -114,21 +117,32 @@ class SandboxPool:
                         app_type=(info.metadata or {}).get("app_type") or None,
                     )
                     added.append(sid)
+            now = datetime.now().timestamp()
+            for cfg in self._instances.values():
+                if cfg.status == "busy" and cfg.busy_since:
+                    try:
+                        busy_ts = datetime.fromisoformat(cfg.busy_since).timestamp()
+                    except (ValueError, TypeError):
+                        busy_ts = 0
+                    if now - busy_ts > self.BUSY_TIMEOUT:
+                        cfg.status = "idle"
+                        cfg.busy_since = None
+                        recovered.append(cfg.sandbox_id)
             self._save()
-        return {"removed": removed, "added": added}
+        return {"removed": removed, "added": added, "recovered": recovered}
 
     # ---------- 获取 / 归还 ----------
 
     def acquire(self, app_type: Optional[str] = None, block: bool = True,
                 timeout: Optional[float] = None, max_retries: int = 2,
-                ensure_apps: bool = True) -> tuple[PoolInstanceConfig, Sandbox]:
+                ensure_apps: bool = False) -> tuple[PoolInstanceConfig, Sandbox]:
         """
-        取一个可用实例，并保证它能访问到开发机上的 31 个 app（写 hosts + 探活，秒级）。
+        取一个可用实例。
 
-        app 不可达说明开发机那边没起服务或网络不通，不是实例的问题，所以不 kill 实例，
-        直接抛 AppsUnreachableError 让调用方去跑 serve_apps.py。
-
-        ensure_apps=False 跳过这一步，用于只需要裸沙箱的场景（如烟雾测试）。
+        ensure_apps=True（旧复用模式）：写 hosts + 探活开发机上的 31 个 app，
+          确认可达后才返回，app 不可达时抛 AppsUnreachableError。
+        ensure_apps=False（默认，kill-per-task 模式）：跳过开发机检查，
+          app 由 app_deploy.deploy_task_apps() 在沙箱内部自行部署。
         """
         last_err = None
         for _ in range(max_retries + 1):
@@ -211,6 +225,7 @@ class SandboxPool:
 
             if cand is not None:
                 cand.status = "busy"
+                cand.busy_since = datetime.now().isoformat()
                 self._save()
                 return cand
 
@@ -236,6 +251,7 @@ class SandboxPool:
             template=self.template,
             created_at=datetime.now().isoformat(),
             status="busy",
+            busy_since=datetime.now().isoformat(),
             app_type=app_type,
         )
         self._instances[cfg.sandbox_id] = cfg
@@ -250,6 +266,7 @@ class SandboxPool:
             if cfg is None:
                 return
             cfg.status = "idle"
+            cfg.busy_since = None
             self._save()
             self._cond.notify_all()
 
